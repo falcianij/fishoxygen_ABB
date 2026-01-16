@@ -1,0 +1,236 @@
+---
+title: "01_tempO2_biogeography"
+output: html_document
+date: "2025-02-19"
+---
+
+```{r}
+#install.packages("rfishbase", repos = c('https://ropensci.r-universe.dev', 'https://cloud.r-project.org'))
+```
+
+```{r}
+library(tidyverse)
+library(here)
+library(rfishbase)
+library(robis)
+library(future.apply)
+```
+
+# Get WOA data
+
+````{r}
+LOCAL_PATH <- "/../traits/obis/data"
+
+PATH <- paste0(gsub("scratch", "scratch", here()), LOCAL_PATH)                  ##PATH <- paste0(gsub("scratch", "project", here()), LOCAL_PATH)   ## use if environment can see mirrored Project folder
+
+woa_oxy <- read.csv(paste0(PATH, "/woa_pO2.csv"))                                #read.csv(here("data/woa_pO2.csv"))             ## use if proximal
+woa_temp <- read.csv(paste0(PATH, "/woa18_95A4_t00an01.csv"))                       #read.csv(here("data/woa18_95A4_t00an01.csv"))  ## use if proximal
+```
+
+
+# Get rFishBase data and filter for functional group
+
+```{r}
+# Dummy length–weight (TL in cm → mass in g)
+a_dummy <- 0.010
+b_dummy <- 3.00
+
+# Helper: make order-of-magnitude mass bins (10^k ... 10^(k+1) g)
+make_mass_bins <- function(mass_g, k_min = NULL, k_max = NULL) {
+  lg <- log10(mass_g)
+  k_min <- if (is.null(k_min)) floor(min(lg, na.rm = TRUE)) else k_min
+  k_max <- if (is.null(k_max)) ceiling(max(lg, na.rm = TRUE)) else k_max
+  # bin edges: 10^k_min, 10^(k_min+1), ..., 10^k_max
+  edges <- 10^(seq(k_min, k_max, by = 1))
+  labs  <- paste0("10^", seq(k_min, k_max-1), "–10^", seq(k_min+1, k_max), " g")
+  list(edges = edges, labels = labs)
+}
+```
+
+```{r}
+species_tbl <- fb_tbl("species") %>% 
+  mutate(sci_name = paste(Genus, Species)) %>%
+  filter(Saltwater == 1) %>%
+  select(sci_name, Genus, Species, Length, DemersPelag) %>%
+  # dummy mass from Length (assumes TL in cm in FishBase "Length")
+  mutate(mass_g = a_dummy * Length ^ b_dummy)
+
+# Check which functional groups are available
+unique(species_tbl$DemersPelag)
+
+# Filter functional group (pelagics, as in your example)
+pelagic_labels <- c("demersal") #c("pelagic-neritic", "pelagic-oceanic", "pelagic")
+fishes_of_interest <- species_tbl %>%
+  filter(DemersPelag %in% pelagic_labels, is.finite(mass_g))
+
+# Build order-of-magnitude bin edges/labels from the pelagic set
+bins <- make_mass_bins(fishes_of_interest$mass_g)
+# Assign a mass_bin factor to each species
+fishes_of_interest <- fishes_of_interest %>%
+  mutate(
+    mass_bin = cut(mass_g, breaks = bins$edges, include.lowest = TRUE, right = FALSE,
+                   labels = bins$labels)
+  )
+
+#fishes_of_interest <- fishes_of_interest[0:9,] # testing example; comment out if script is ready
+
+# Keep a compact lookup for the OBIS join
+sp_lookup <- fishes_of_interest %>%
+  select(sci_name, mass_g, mass_bin)
+species_names <- fishes_of_interest$sci_name
+```
+
+
+## Get rOBIS data for functional group and record missing species
+
+```{r}
+# Set up parallel processing
+plan(multisession, workers = 32)  # Use available cores
+
+# Function to fetch OBIS data safely
+get_obis_data <- function(species) {
+  message("Fetching OBIS data for: ", species)
+  tryCatch({
+    data <- occurrence(species)
+    if (!is.null(data) && nrow(data) > 0) {
+      data <- data %>% mutate(species = species)  # Keep track of species name
+      return(data)
+    } else {
+      return(NULL)  # No data found
+    }
+  }, error = function(e) {
+    message("No data found for: ", species)
+    return(NULL)
+  })
+}
+
+# Fetch OBIS data in parallel
+obis_list <- future_lapply(species_names, get_obis_data)
+
+# Combine valid data & record missing species
+obis_data <- bind_rows(obis_list)
+missing_species <- species_names[which(sapply(obis_list, is.null))]
+
+# Save missing species to a file
+writeLines(missing_species, here("data/missing_species.txt"))
+```
+
+
+```{r}
+# Initialize list to store OBIS data and missing species
+obis_list <- list()
+missing_species <- c()
+
+for (species in species_names) {
+  message("Fetching OBIS data for: ", species)
+  temp_data <- tryCatch(
+    occurrence(species),
+    error = function(e) {
+      message("No data found for: ", species)
+      missing_species <<- c(missing_species, species)
+      return(NULL)
+    }
+  )
+  
+  if (!is.null(temp_data) && nrow(temp_data) > 0) {
+    temp_data <- temp_data %>%
+      mutate(species = species) # Keep track of the species name
+    obis_list[[species]] <- temp_data
+  }
+}
+
+# Combine all valid OBIS data
+obis_data <- bind_rows(obis_list)
+
+# Attach mass info/bins to each OBIS record
+obis_data <- obis_data %>%
+  mutate(species = ifelse(is.na(species), scientificName, species)) %>%  # safety
+  rename(LATITUDE = decimalLatitude, LONGITUDE = decimalLongitude) %>%
+  left_join(sp_lookup, by = c("species" = "sci_name")) #%>%
+  #filter(!is.na(mass_bin))  # drop species with no mass estimate
+
+# Save missing species to a file
+#writeLines(missing_species, here("data/missing_species.txt"))
+```
+
+
+# Snap OBIS to WOA grid & merge environment
+
+```{r}
+# Reshape WOA (as you had it)
+woa_temp_long <- woa_temp %>% 
+  pivot_longer(starts_with("X"), names_to = "depth_m", values_to = "temperature") %>%
+  mutate(depth_m = as.numeric(sub("^X","",depth_m)))
+
+woa_oxy_long <- woa_oxy %>% 
+  pivot_longer(starts_with("X"), names_to = "depth_m", values_to = "oxygen") %>%
+  mutate(depth_m = as.numeric(sub("^X","",depth_m)))
+
+woa_data <- full_join(woa_temp_long, woa_oxy_long, by = c("LATITUDE","LONGITUDE","depth_m"))
+
+# Central depth and grid snapping
+obis_binned <- obis_data %>%
+  mutate(
+    min_depth = ifelse(is.na(minimumDepthInMeters), NA, minimumDepthInMeters),
+    max_depth = ifelse(is.na(maximumDepthInMeters), NA, maximumDepthInMeters),
+    central_depth = case_when(
+      !is.na(min_depth) & !is.na(max_depth) ~ (min_depth + max_depth)/2,
+      !is.na(min_depth) ~ min_depth,
+      !is.na(max_depth) ~ max_depth,
+      TRUE ~ NA_real_
+    )
+  ) %>%
+  drop_na(central_depth) %>%
+  mutate(
+    LATITUDE  = round(LATITUDE  / 1) * 1 + 0.5,
+    LONGITUDE = round(LONGITUDE / 1) * 1 + 0.5
+  )
+
+# Depth matching
+woa_depths <- unique(woa_data$depth_m)
+obis_binned <- obis_binned %>%
+  rowwise() %>%
+  mutate(nearest_woa_depth = woa_depths[which.min(abs(woa_depths - central_depth))]) %>%
+  ungroup()
+
+# Join environment (keep mass_bin)
+combined_data <- obis_binned %>%
+  left_join(woa_data, by = c("LATITUDE","LONGITUDE","nearest_woa_depth" = "depth_m")) %>%
+  group_by(LATITUDE, LONGITUDE) %>%
+  mutate(
+    temperature = ifelse(is.na(temperature), min(temperature, na.rm = TRUE), temperature),
+    oxygen      = ifelse(is.na(oxygen),      min(oxygen,      na.rm = TRUE), oxygen)
+  ) %>%
+  ungroup() %>%
+  filter(is.finite(oxygen), is.finite(temperature)) %>%
+  mutate(
+    temperature = pmax(pmin(temperature, 30), 0),
+    oxygen      = pmax(pmin(oxygen,      30), 0)
+  )
+```
+
+
+# Plotting
+
+```{r}
+ggplot(combined_data, aes(x = temperature, y = oxygen)) +
+  geom_bin2d(bins = 50) +
+  coord_cartesian(xlim = c(0,30), ylim = c(0,30)) +
+  ggtitle("Demersal occurrences (all masses)") +
+  scale_fill_viridis_c(option = "viridis", na.value = "white", trans = "log10") +
+  labs(x = "Temperature (°C)", y = "pO2 (kPa)", fill = "Occurrences") +
+  theme_minimal()
+```
+
+```{r}
+ggplot(combined_data, aes(x = temperature, y = oxygen)) +
+  geom_bin2d(bins = 50) +
+  coord_cartesian(xlim = c(0,30), ylim = c(0,30)) +
+  facet_wrap(~ mass_bin, ncol = 3) +
+  ggtitle("Demersal occurrences by mass bin (order-of-magnitude)") +
+  scale_fill_viridis_c(option = "viridis", na.value = "white", trans = "log10") +
+  labs(x = "Temperature (°C)", y = "pO2 (kPa)", fill = "Occurrences") +
+  theme_minimal() +
+  theme(strip.text = element_text(face = "bold"))
+```
+

@@ -1,0 +1,266 @@
+---
+title: "plot_statespace_T_pO2"
+output: html_document
+date: "2025-07-14"
+---
+
+```{r}
+library(tidyverse)
+library(here)
+library(stringr)
+```
+
+
+# Get data
+
+## WOA
+
+```{r}
+LOCAL_PATH <- "/../traits/obis/data"
+
+PATH <- paste0(gsub("scratch", "scratch", here()), LOCAL_PATH)                  ##PATH <- paste0(gsub("scratch", "project", here()), LOCAL_PATH)   ## use if environment can see mirrored Project folder
+
+woa_oxy <- read.csv(paste0(PATH, "/woa_pO2.csv"))                                #read.csv(here("data/woa_pO2.csv"))             ## use if proximal
+woa_temp <- read.csv(paste0(PATH, "/woa18_95A4_t00an01.csv"))                       #read.csv(here("data/woa18_95A4_t00an01.csv"))  ## use if proximal
+```
+
+
+## OBIS-WOA tagged
+
+```{r}
+LOCAL_PATH <- "/../traits/obis/data_out"
+
+PATH <- paste0(gsub("scratch", "scratch", here()), LOCAL_PATH)                  ##PATH <- paste0(gsub("scratch", "project", here()), LOCAL_PATH)   ## use if environment can see mirrored Project folder
+
+occurrence_df <- load(paste0(PATH, "/pelagic_WOA_pO2-T.RData"))
+```
+
+
+## Reshape
+
+
+```{r}
+#--- Reshape ---#
+
+# Reshape temperature to long: one row per grid cell × depth
+woa_temp_long <- woa_temp %>%
+  pivot_longer(
+    cols = -c(LATITUDE, LONGITUDE),
+    names_to = "temp_layer",
+    values_to = "temperature"
+  ) %>%
+  mutate(
+    depth = as.numeric(str_extract(temp_layer, "\\d+"))  # extract depth from "T0", "T10", etc.
+  ) %>%
+  select(LATITUDE, LONGITUDE, depth, temperature)
+
+# Reshape oxygen to long
+woa_oxy_long <- woa_oxy %>%
+  pivot_longer(
+    cols = -c(LATITUDE, LONGITUDE),
+    names_to = "oxy_layer",
+    values_to = "oxygen"
+  ) %>%
+  mutate(
+    depth = as.numeric(str_extract(oxy_layer, "\\d+"))
+  ) %>%
+  select(LATITUDE, LONGITUDE, depth, oxygen)
+
+# Join to get T & O2 together for each grid cell & depth
+woa_env <- woa_temp_long %>%
+  inner_join(woa_oxy_long,
+             by = c("LATITUDE", "LONGITUDE", "depth") ) #%>%
+  #filter(depth <= 1000)  # If needed, filter region and depth range to match your fish data:
+```
+
+
+# Analysis
+
+```{r}
+#--- Examine ranges ---#
+
+range_T_env  <- range(woa_env$temperature, na.rm = TRUE)
+range_T_fish <- range(combined_data$temperature, na.rm = TRUE)
+range_O_env  <- range(woa_env$oxygen, na.rm = TRUE)
+range_O_fish <- range(combined_data$oxygen, na.rm = TRUE)
+
+T_breaks <- seq(floor(min(range_T_env[1],  range_T_fish[1])),
+                ceiling(max(range_T_env[2], range_T_fish[2])),
+                by = 1)  # 1°C bins; adjust as needed
+
+O_breaks <- seq(floor(min(range_O_env[1],  range_O_fish[1])),
+                ceiling(max(range_O_env[2], range_O_fish[2])),
+                by = 1)  # 1 kPa bins; adjust
+
+T_mids <- (T_breaks[-1] + T_breaks[-length(T_breaks)]) / 2
+O_mids <- (O_breaks[-1] + O_breaks[-length(O_breaks)]) / 2
+
+
+#--- Binning ---#
+
+# Bin environment
+woa_env_binned <- woa_env %>%
+  mutate(
+    T_bin = cut(temperature, breaks = T_breaks, include.lowest = TRUE),
+    O_bin = cut(oxygen,     breaks = O_breaks, include.lowest = TRUE)
+  )
+
+# Bin fish occurrences
+fish_binned <- combined_data %>%
+  mutate(
+    T_bin = cut(temperature, breaks = T_breaks, include.lowest = TRUE),
+    O_bin = cut(oxygen,     breaks = O_breaks, include.lowest = TRUE)
+  )
+
+# Full grid
+T_levels  <- levels(woa_env_binned$T_bin)  # or levels(fish_binned$T_bin) – but they should match
+O_levels  <- levels(woa_env_binned$O_bin)
+mass_vals <- sort(unique(fish_binned$mass_bin))
+
+full_grid <- tidyr::crossing(
+  mass_bin = mass_vals,
+  T_bin    = T_levels,
+  O_bin    = O_levels
+) %>%
+  mutate(
+    T_mid = T_mids[match(T_bin, T_levels)],
+    O_mid = O_mids[match(O_bin, O_levels)]
+  )
+```
+
+
+## Compute availability
+
+```{r}
+#--- Count and percent ---#
+
+# Environment
+env_counts <- woa_env_binned %>%
+  filter(!is.na(T_bin), !is.na(O_bin)) %>%
+  count(T_bin, O_bin, name = "env_n") %>%
+  mutate(env_p = env_n / sum(env_n))
+
+# All fish occurrences
+fish_counts_all <- fish_binned %>%
+  filter(!is.na(T_bin), !is.na(O_bin)) %>%
+  count(T_bin, O_bin, name = "fish_n") %>%
+  mutate(fish_p = fish_n / sum(fish_n))
+
+# Fish occurrences by size
+fish_counts_by_size <- fish_binned %>%
+  filter(!is.na(T_bin), !is.na(O_bin)) %>%
+  count(mass_bin, T_bin, O_bin, name = "fish_n") %>%
+  group_by(mass_bin) %>%
+  mutate(fish_p = fish_n / sum(fish_n)) %>%
+  ungroup()
+```
+
+```{r}
+#--- Processing ---#
+env_n_min   <- 10       # or: require at least 5 grid cells
+fish_n_min  <- 1       # require at least 3 occurrences for that mass_bin
+
+
+# By size
+habitat_by_size <- full_grid %>%
+  left_join(env_counts, by = c("T_bin", "O_bin")) %>%
+  left_join(fish_counts_by_size, by = c("mass_bin", "T_bin", "O_bin")) %>%
+  mutate(
+    env_n  = if_else(is.na(env_n),  0L, env_n),
+    fish_n = if_else(is.na(fish_n), 0L, fish_n)
+  ) %>%
+  mutate(
+    habitat_class = case_when(
+      env_n > 0 & fish_n > 0 ~ "Used",        # habitat exists + fish seen
+      env_n > 0 & fish_n == 0 ~ "Unused",     # habitat exists + no fish seen
+      env_n == 0              ~ "Unavailable" # no ocean habitat in WOA
+    ),
+    habitat_class_threshold = case_when(
+      env_n > env_n_min & fish_n > fish_n_min ~ "Used",        # habitat exists + fish seen
+      env_n > env_n_min & fish_n <= fish_n_min ~ "Unused",     # habitat exists + no fish seen
+      env_n <= env_n_min              ~ "Unavailable" # no ocean habitat in WOA
+    )
+  )
+
+
+# All
+habitat_all <- full_grid %>%
+  left_join(env_counts, by = c("T_bin", "O_bin")) %>%
+  left_join(fish_counts_all, by = c("T_bin", "O_bin")) %>%
+  mutate(
+    env_n  = if_else(is.na(env_n),  0L, env_n),
+    fish_n = if_else(is.na(fish_n), 0L, fish_n)
+  ) %>%
+  mutate(
+    habitat_class = case_when(
+      env_n > 0 & fish_n > 0 ~ "Used",        # habitat exists + fish seen
+      env_n > 0 & fish_n == 0 ~ "Unused",     # habitat exists + no fish seen
+      env_n == 0              ~ "Unavailable" # no ocean habitat in WOA
+    ),
+    habitat_class_threshold = case_when(
+      env_n > env_n_min & fish_n > fish_n_min ~ "Used",        # habitat exists + fish seen
+      env_n > env_n_min & fish_n <= fish_n_min ~ "Unused",     # habitat exists + no fish seen
+      env_n <= env_n_min              ~ "Unavailable" # no ocean habitat in WOA
+    )
+  )
+```
+
+
+# Visualize
+
+```{r}
+ggplot() +
+  # Unavailable habitat: flat color
+  geom_tile(
+    data = habitat_by_size %>%
+      filter(habitat_class_threshold == "Unavailable"),
+    aes(x = T_mid, y = O_mid),
+    fill  = "gray",  # flat pale color
+    color = NA
+  ) +
+  # Unused habitat: flat color
+  geom_tile(
+    data = habitat_by_size %>%
+      filter(habitat_class_threshold == "Unused"),
+    aes(x = T_mid, y = O_mid),
+    fill  = "white",  # flat pale color
+    color = NA
+  ) +
+  # Used habitat: log-scaled color by fish_n
+  geom_tile(
+    data = habitat_by_size %>%
+      filter(habitat_class_threshold == "Used", fish_n > 0),
+    aes(x = T_mid, y = O_mid, fill = fish_n),
+    color = NA
+  ) +
+  facet_wrap(~ mass_bin) +
+  coord_equal(xlim = c(0, 30), ylim = c(0, 30)) +
+  # scale_fill_viridis_c(
+  #   name = "Occurrences",
+  #   trans = "log10"  # log-transform the color scale
+  # ) +
+  scale_fill_gradient(
+    name = "Occurrences",
+    trans = "log10",
+    low  = "white",
+    high = "#254b7f"
+  ) +
+  theme_minimal() +
+  labs(
+    x = "Temperature (°C)",
+    y = "Oxygen (kPa)"#,
+    #title = "Used vs unused T–pO₂ space by mass bin"
+  )
+```
+
+
+# Save
+
+```{r}
+LOCAL_PATH <- "/data_out"
+
+PATH <- paste0(gsub("scratch", "scratch", here()), LOCAL_PATH)                  ##PATH <- paste0(gsub("scratch", "project", here()), LOCAL_PATH)   ## use if environment can see mirrored Project folder
+
+write.csv(habitat_by_size, paste0(PATH, "/ocurrence_TO2.csv"), row.names = FALSE)
+```
+

@@ -1,0 +1,675 @@
+---
+title: "01_model_test"
+output: html_document
+date: "2025-10-17"
+---
+
+```{r}
+library(here)
+
+library(tidyverse)
+library(plotly)
+
+library(interp)
+library(scales)
+library(metR)
+library(ggh4x)
+library(ggtext)
+
+library(patchwork) #
+library(grid)      #
+
+# Source model functions (relative to project root)
+file_sources = list.files(c(here("scripts")), pattern="*.R$", full.names=TRUE, ignore.case=TRUE)
+sapply(file_sources, source, .GlobalEnv)
+#source(here("scripts", "model_functions.R"), here("scripts", "analysis_functions.R"))
+```
+
+
+# Traits
+
+```{r}
+trait_list <- list(
+  largePel = list(
+    a_a = 80, b_R = 0.85,#0.58,                                                 # active metabolism scale, speed geometry (p = 3 - b_R); a_a = 80
+    a_g = 3, hm = 1,                                                            # gill diffusion: S = A_g*(pO2_env - pO2_int)*Q10_o/hm
+    f_m = 0.1, a_m = 1,  b_m = 0.75,                                            # basal metabolism scale (fraction of a_c); f_m = 0.1
+    a_e = 200, b_e=2/3,                                                         # encounter
+    a_c = 60, b_c = 0.75, epsAssim = 0.7, alpha = 0.2,                          # consumption (+ SDA fraction alpha)
+    T_ref = 10,
+    Q10_m = 2.00, Q10_a = 1.80, Q10_o = 1.50, Q10_c = 2.00                      # temperature Q10s
+  )
+)
+
+group <- "largePel"
+tr <- trait_list[[group]]
+```
+
+
+# Theme
+
+```{r}
+# --- Minimal square theme with grey50 outline ---------------------------
+# Theme
+base_theme <- theme_minimal(base_size = 11) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(colour = "grey50", fill = NA, linewidth = 0.6),
+    legend.position = "bottom",
+    legend.box = "horizontal",
+    legend.justification = "center",
+    legend.title = element_text(),
+    legend.text  = element_text(),
+    axis.ticks       = element_line(colour = "grey50"),
+    axis.ticks.length = unit(3, "pt")
+  )
+
+# --- Isolines ---
+panel_breaks_pos <- function(df, zcol, n_lines = 3) {
+  z <- df[[zcol]]
+  z <- z[is.finite(z) & z > 0]
+  if (!length(z)) return(numeric())
+  rng  <- range(z)
+  brks <- seq(rng[1], rng[2], length.out = n_lines + 2)
+  brks[2:(length(brks) - 1)]
+}
+
+# Legend helper (slim framed bar)
+legend_bar_guide <- function(breaks, labels) {
+  guide_colorbar(
+    direction      = "horizontal",
+    title.position = "top",
+    label.position = "bottom",
+    ticks          = TRUE,
+    frame.colour   = "grey50",
+    frame.linewidth= 0.5,
+    #barheight      = grid::unit(4, "mm"),
+    #barwidth       = grid::unit(10, "lines"),  # try to span the panel width
+    # If your ggplot2 ignores npc here, bump this number instead:
+    # barwidth    = grid::unit(36, "lines")
+    ticks.colour   = "grey20"
+  )
+}
+
+# --- Optional: hide y labels/text when you don't want them ---------------
+theme_hide_y_labels <- function() {
+  theme(axis.title.y = element_blank(),
+        axis.text.y  = element_blank())
+}
+```
+
+
+
+# Fig. 6
+
+## Faces
+
+```{r}
+# -----------------------------
+# Core parameters
+# -----------------------------
+mass_val <- 1e0        # choose your focal mass (change as needed)
+
+Tseq_full    <- seq(0, 30, by = 0.05)        # temperature axis
+f_seq        <- seq(0.0, 0.95, by = 0.002)   # prey index axis
+pO2seq_full  <- seq(0, 30, by = 0.05)        # oxygen axis
+
+# Axis extrema (faces of the cube)
+f_min <- min(f_seq);   f_max <- max(f_seq)
+T_min <- min(Tseq_full); T_max <- max(Tseq_full)
+O_min <- min(pO2seq_full); O_max <- max(pO2seq_full)
+
+# -----------------------------
+# Regime palette + levels
+# -----------------------------
+reg_levels <- c(
+  "Oxygen exclusion",
+  "Energetic exclusion",
+  "Oxygen limited (strict)",
+  "Oxygen limited (prey sensitive)",
+  "Prey limited (O2-tightening)",
+  "Prey limited (O2-relaxing)"
+)
+
+regime_cols <- c(
+  "Oxygen exclusion"                   = "black",
+  "Energetic exclusion"                = "gray60",
+  "Oxygen limited (strict)"            = "#8a5796",
+  "Oxygen limited (prey sensitive)"    = "#BEA0C4",
+  "Prey limited (O2-tightening)"       = "#FDE725FF",
+  "Prey limited (O2-relaxing)"         = "#4DB674"
+)
+
+```
+
+```{r}
+# Helper to run gradients + regimes on a surface
+classify_surface <- function(surf, tr) {
+  surf %>%
+    add_B_gradients(
+      tr        = tr,
+      method    = "perturb",
+      use_norm  = TRUE,
+      prey_axis = "B",
+      d_rel     = 0.05,
+      progress  = TRUE
+    ) %>%
+    add_regime_labels2(
+      use_derivs = TRUE,
+      dE_thr     = 0.01,
+      dO_thr     = 0.01
+    ) %>%
+    # enforce consistent factor levels
+    mutate(regime = factor(regime, levels = reg_levels))
+}
+
+# Helper to make a square, faceless, legend-free raster plot
+make_face_plot <- function(df, xcol, ycol) {
+  x <- rlang::sym(xcol)
+  y <- rlang::sym(ycol)
+
+  # Build grid for contours from class_id
+  xs <- sort(unique(df[[xcol]]))
+  ys <- sort(unique(df[[ycol]]))
+
+  Z_tbl <- df %>%
+    select(!!x, !!y, class_id) %>%
+    tidyr::pivot_wider(names_from = !!y, values_from = class_id) %>%
+    arrange(!!x)
+
+  Z <- as.matrix(Z_tbl[, -1, drop = FALSE])
+
+  grid_for_contour <- expand.grid(
+    x = xs,
+    y = ys
+  )
+  grid_for_contour$class_id <- as.vector(Z)
+
+  brks <- seq(1.5, length(reg_levels) - 0.5, by = 1)
+
+  ggplot() +
+    geom_raster(data = df, aes(x = !!x, y = !!y, fill = regime)) +
+    geom_contour(
+      data = grid_for_contour,
+      aes(x = x, y = y, z = class_id),
+      breaks   = brks,
+      colour   = "gray60",
+      linewidth = 0.3
+    ) +
+    scale_fill_manual(
+      values = regime_cols,
+      drop   = FALSE,
+      guide  = "none"   # no legend
+    ) +
+    scale_x_continuous(expand = c(0, 0)) +
+    scale_y_continuous(expand = c(0, 0)) +
+    coord_fixed() +
+    theme_void() +
+    theme(
+      aspect.ratio = 1,
+      plot.margin  = margin(0, 0, 0, 0),
+      panel.spacing = unit(0, "pt")
+    )
+}
+```
+
+```{r}
+# Face 1: low prey (f_ref = f_min), varying T × pO2
+surf_face_f_min <- compute_state_surface(
+  tr          = tr,
+  masses      = mass_val,
+  Tseq        = Tseq_full,
+  pO2seq      = pO2seq_full,
+  prey_units  = "prey_index",
+  preys       = f_min,         # fixed low prey index
+  pair_mode   = "cross",
+  normalize_E = TRUE,
+  progress    = TRUE
+) %>%
+  classify_surface(tr)
+
+p_face_f_min <- make_face_plot(surf_face_f_min, xcol = "T", ycol = "pO2")
+p_face_f_min
+
+# Face 2: high prey (f_ref = f_max), varying T × pO2
+surf_face_f_max <- compute_state_surface(
+  tr          = tr,
+  masses      = mass_val,
+  Tseq        = Tseq_full,
+  pO2seq      = pO2seq_full,
+  prey_units  = "prey_index",
+  preys       = f_max,         # fixed high prey index
+  pair_mode   = "cross",
+  normalize_E = TRUE,
+  progress    = TRUE
+) %>%
+  classify_surface(tr)
+
+p_face_f_max <- make_face_plot(surf_face_f_max, xcol = "T", ycol = "pO2")
+p_face_f_max
+```
+
+
+```{r}
+# Face 3: cold face (T = T_min), varying f_ref × pO2
+surf_face_T_min <- compute_state_surface(
+  tr          = tr,
+  masses      = mass_val,
+  Tseq        = T_min,         # fixed low T
+  pO2seq      = pO2seq_full,
+  prey_units  = "prey_index",
+  preys       = f_seq,         # full prey index axis
+  pair_mode   = "cross",
+  normalize_E = TRUE,
+  progress    = TRUE
+) %>%
+  classify_surface(tr)
+
+p_face_T_min <- make_face_plot(surf_face_T_min, xcol = "f_ref", ycol = "pO2")
+p_face_T_min
+
+# Face 4: warm face (T = T_max), varying f_ref × pO2
+surf_face_T_max <- compute_state_surface(
+  tr          = tr,
+  masses      = mass_val,
+  Tseq        = T_max,         # fixed high T
+  pO2seq      = pO2seq_full,
+  prey_units  = "prey_index",
+  preys       = f_seq,
+  pair_mode   = "cross",
+  normalize_E = TRUE,
+  progress    = TRUE
+) %>%
+  classify_surface(tr)
+
+p_face_T_max <- make_face_plot(surf_face_T_max, xcol = "f_ref", ycol = "pO2")
+p_face_T_max
+```
+
+```{r}
+# Face 5: hypoxic face (pO2 = O_min), varying f_ref × T
+surf_face_O_min <- compute_state_surface(
+  tr          = tr,
+  masses      = mass_val,
+  Tseq        = Tseq_full,
+  pO2seq      = O_min,         # fixed low O2
+  prey_units  = "prey_index",
+  preys       = f_seq,
+  pair_mode   = "cross",
+  normalize_E = TRUE,
+  progress    = TRUE
+) %>%
+  classify_surface(tr)
+
+p_face_O_min <- make_face_plot(surf_face_O_min, xcol = "f_ref", ycol = "T")
+p_face_O_min
+
+# Face 6: well-oxygenated face (pO2 = O_max), varying f_ref × T
+surf_face_O_max <- compute_state_surface(
+  tr          = tr,
+  masses      = mass_val,
+  Tseq        = Tseq_full,
+  pO2seq      = O_max,         # fixed high O2
+  prey_units  = "prey_index",
+  preys       = f_seq,
+  pair_mode   = "cross",
+  normalize_E = TRUE,
+  progress    = TRUE
+) %>%
+  classify_surface(tr)
+
+p_face_O_max <- make_face_plot(surf_face_O_max, xcol = "f_ref", ycol = "T")
+p_face_O_max
+```
+
+```{r}
+# Pick a square output size (in inches) and resolution
+face_size <- 4   # 4" x 4" square; change if you like
+dpi_val   <- 1000
+
+ggsave("face_f_min.png", p_face_f_min,
+       width = face_size, height = face_size,
+       units = "in", dpi = dpi_val, bg = "white")
+
+ggsave("face_f_max.png", p_face_f_max,
+       width = face_size, height = face_size,
+       units = "in", dpi = dpi_val, bg = "white")
+
+ggsave("face_T_min.png", p_face_T_min,
+       width = face_size, height = face_size,
+       units = "in", dpi = dpi_val, bg = "white")
+
+ggsave("face_T_max.png", p_face_T_max,
+       width = face_size, height = face_size,
+       units = "in", dpi = dpi_val, bg = "white")
+
+ggsave("face_O_min.png", p_face_O_min,
+       width = face_size, height = face_size,
+       units = "in", dpi = dpi_val, bg = "white")
+
+ggsave("face_O_max.png", p_face_O_max,
+       width = face_size, height = face_size,
+       units = "in", dpi = dpi_val, bg = "white")
+
+```
+
+
+
+## Surface test
+
+```{r}
+# 1. Build the surface over T, pO2, f_ref for one mass
+mass_val <- 1e4  # for example
+
+f_seq   <- seq(0.05, 0.95, by = 0.05)
+Tseq    <- seq(0, 30, by = 0.1)
+pO2seq  <- seq(0, 25, by = 0.1)
+
+surf <- compute_state_surface(
+  tr         = tr,
+  masses     = mass_val,
+  Tseq       = Tseq,
+  pO2seq     = pO2seq,
+  prey_units = "prey_index",
+  preys      = f_seq,
+  pair_mode  = "cross",
+  normalize_E = TRUE,
+  progress    = TRUE
+)
+
+# 2. Add gradients (using f_ref as prey axis + normalized energy)
+surf_grad <- add_B_gradients(
+  surface   = surf,
+  tr        = tr,
+  method    = "auto",
+  prey_axis = "f_ref",
+  use_norm  = TRUE,
+  d_rel     = 0.05,
+  progress  = TRUE
+)
+
+# 3. Classify regimes (using the new O-derivative-based labels)
+surf_reg <- add_regime_labels2(
+  surf_grad,
+  eps_O2     = 0.05,
+  dE_thr     = 0.1,
+  dO_thr     = 0.01,
+  use_derivs = TRUE
+)
+
+# Keep just one mass (in case compute_state_surface was run for several)
+surf_reg <- dplyr::filter(surf_reg, mass == mass_val)
+
+```
+
+
+```{r}
+library(plotly)
+
+# give regimes distinct colors
+reg_cols <- RColorBrewer::brewer.pal(n = length(levels(surf_reg$regime)), "Set1")
+names(reg_cols) <- levels(surf_reg$regime)
+
+plot_ly(
+  data = surf_reg,
+  x = ~f_ref, y = ~T, z = ~pO2,
+  type = "scatter3d",
+  mode = "markers",
+  color = ~regime,
+  colors = reg_cols,
+  marker = list(size = 3, opacity = 0.6)
+) %>%
+  layout(
+    scene = list(
+      xaxis = list(title = "Prey index (f_ref)"),
+      yaxis = list(title = "Temperature (°C)"),
+      zaxis = list(title = "Oxygen (kPa)")
+    ),
+    legend = list(orientation = "h")
+  )
+
+```
+
+
+
+
+
+
+
+
+
+
+# Tests
+
+```{r}
+# --- 1) Effective-Q10 helper (works on E_net or E_net_norm) -------------
+Q10_eff <- function(val_T1, val_T2, T1, T2) (val_T2/val_T1)^(10/(T2 - T1))
+
+q10_grid <- function(surf, T1, T2, value_col = c("E_net", "E_net_norm", "E_mass_norm"),
+                     hold_cols = c("mass","pO2")) {
+  value_col <- match.arg(value_col)
+  d1 <- subset(surf, T == T1)
+  d2 <- subset(surf, T == T2)
+  key <- hold_cols
+  m   <- merge(d1[, c(key, value_col)], d2[, c(key, value_col)],
+               by = key, suffixes = c("1","2"))
+  names(m)[names(m) == paste0(value_col,"1")] <- "v1"
+  names(m)[names(m) == paste0(value_col,"2")] <- "v2"
+  transform(m, Q10 = Q10_eff(v1, pmax(v2, 1e-12), T1, T2))
+}
+
+
+T1 <- 10; T2 <- 20
+masses  <- c(1e0, 1e2, 1e4)
+pO2_vec <- seq(0, 30, by = 1)
+f_ref   <- 0.6
+
+# (i) Fixed prey density across T: "prey_index"
+surf_fixed <- compute_state_surface(
+  tr, masses, Tseq = c(T1, T2), pO2seq = pO2_vec,
+  prey_units = "prey_index", preys = f_ref, pair_mode = "cross",
+  normalize_E = TRUE
+)
+surf_fixed$E_mass_norm <- surf_fixed$E_net / surf_fixed$mass ^ 0.75
+q10_fixed <- q10_grid(surf_fixed, T1, T2, value_col = "E_mass_norm")
+
+# (ii) Keep feeding level constant vs T (B recalculated at each T): "feeding_level"
+surf_covary <- compute_state_surface(
+  tr, masses, Tseq = c(T1, T2), pO2seq = pO2_vec,
+  prey_units = "feeding_level", preys = f_ref, pair_mode = "cross",
+  normalize_E = TRUE
+)
+surf_covary$E_mass_norm <- surf_covary$E_net / surf_covary$mass ^ 0.75
+q10_covary <- q10_grid(surf_covary, T1, T2, value_col = "E_mass_norm")
+
+# Quick visualization: realized Q10 distributions
+viz_q10 <- bind_rows(
+  mutate(q10_fixed,  mode = "Fixed prey (prey_index)"),
+  mutate(q10_covary, mode = "Constant f (feeding_level)")
+)
+ggplot(viz_q10, aes(x = pO2, y = Q10, color = factor(mass))) +
+  #geom_point(position = position_jitter(width = 0.2, height = 0), alpha = 0.8) +
+  geom_line(alpha = 0.8) +
+  geom_hline(yintercept = 1.1, linetype = 2) +
+  facet_wrap(~ mode) +
+  scale_y_continuous(limits = c(0.6, 3)) +
+  scale_color_brewer(palette = "Dark2", name = "Mass (g)") +
+  labs(x = expression(p[O[2]]~"(kPa)"),
+       y = expression("Realized " * Q[10] * " of " * nu),
+       title = "Effective Q10 of available energy across O2 and size") +
+  theme_minimal(base_size = 12)
+```
+
+
+```{r}
+# ---------------------------
+# Config
+# ---------------------------
+Tseq_plot   <- seq(0, 30, by = 0.5)
+masses_plot <- c(1, 1e4)             # 1 g and 10 kg
+pO2_vals    <- c(25, 15, 5)
+f_ref       <- 0.6
+
+# ---------------------------
+# Build surface (keeps your style)
+# Choose either prey_index or feeding_level; here: feeding_level
+# ---------------------------
+surf <- compute_state_surface(
+  tr, masses_plot, Tseq = Tseq_plot, pO2seq = pO2_vals,
+  prey_units = "prey_index", preys = f_ref, pair_mode = "cross",
+  normalize_E = TRUE
+) %>%
+  mutate(
+    E_mass_norm = E_net / (mass ^ 0.75),
+    mass_lab = factor(ifelse(mass < 10, "1 g", "10 kg"),
+                      levels = c("1 g","10 kg")),
+    pO2_lab  = factor(paste0(pO2, " kPa"), levels = paste0(pO2_vals, " kPa"))
+  ) %>%
+  filter(E_mass_norm > 0)   # log-scale safe-guard
+
+# ---------------------------
+# Reference Q10 lines (Q10 = 2 and Q10 = 1)
+# In log10-space, slope m = log10(Q10)/10 per °C, anchor at (T0=10, y0=10)
+# ---------------------------
+T0 <- 10
+y0 <- 10
+m_Q10_2 <- log10(2) / 10
+m_Q10_1 <- log10(1.1) / 10#0
+
+b0_Q10_2 <- log10(y0) - m_Q10_2 * T0
+b0_Q10_1 <- log10(y0) - m_Q10_1 * T0
+
+ref_lines <- tibble(
+  T = rep(Tseq_plot, 2),
+  E_ref = c(10^(b0_Q10_2 + m_Q10_2*Tseq_plot),
+            10^(b0_Q10_1 + m_Q10_1*Tseq_plot)),
+  ref = rep(c("Q10 = 2.0 (ref)", "Q10 = 1.1 (ref)"), each = length(Tseq_plot))
+)
+
+# ---------------------------
+# Plot (points only for your model outputs)
+# ---------------------------
+ggplot() +
+  # Reference Q10 lines
+  geom_line(data = ref_lines,
+            aes(x = T, y = E_ref, linetype = ref),
+            color = "grey30", linewidth = 0.8) +
+
+  # Model points by pO2 (no fits)
+  geom_point(data = surf,
+             aes(x = T, y = E_net, color = pO2_lab),
+             size = 1.6, alpha = 0.9) +
+
+  facet_wrap(~ mass_lab, nrow = 1) +
+
+  scale_y_log10(
+    breaks = c(1, 10, 100),
+    limits = c(1, 100),
+    labels = scales::label_number(accuracy = 1)
+  ) +
+  scale_color_brewer(palette = "Dark2", name = expression(p[O[2]]~"(kPa)")) +
+  scale_linetype_manual(values = c("Q10 = 2.0 (ref)" = "dashed",
+                                   "Q10 = 1.1 (ref)" = "solid"),
+                        name = "Reference Q10") +
+
+  labs(x = "Temperature (°C)",
+       y = expression(E[mass~norm]),
+       title = expression("Available energy vs temperature (points only)"),
+       subtitle = "Colors = pO2 (kPa); grey lines = Q10 reference slopes") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "right")
+
+```
+
+
+```{r}
+# -----------------------------
+# Config
+# -----------------------------
+f_target <- 0.5
+eps <- 1e-6            # to avoid divide-by-zero if min pO2 hits 0
+singleton_as_one <- TRUE  # if only one O2-limited cell at a T, return 1 (else NA)
+
+# -----------------------------
+# 0) Slice feeding_level = 0.6 (exact if present; else nearest)
+# -----------------------------
+has_exact <- any(abs(surf_F_TpO2space$f_ref - f_target) < 1e-9, na.rm = TRUE)
+surf_slice <- if (has_exact) {
+  surf_F_TpO2space %>% filter(abs(f_ref - f_target) < 1e-9)
+} else {
+  f_near <- surf_F_TpO2space %>%
+    summarize(f_near = f_ref[which.min(abs(f_ref - f_target))]) %>% pull(f_near)
+  message(sprintf("Note: f_ref=%.2f not found; using nearest f_ref=%.2f", f_target, f_near))
+  surf_F_TpO2space %>% filter(f_ref == f_near)
+}
+
+# Ensure regime labels exist in surf_slice (you already called add_regime_labels upstream)
+
+# -----------------------------
+# 1) Compute min/max oxygen-limited pO2 and the ratio per (mass, T)
+# -----------------------------
+ratio_df <- surf_slice %>%
+  select(mass, T, pO2, regime) %>%
+  group_by(mass, T) %>%
+  summarize(
+    n_oxlim = sum(regime == "Oxygen limited", na.rm = TRUE),
+    pO2_min = if (n_oxlim > 0) min(pO2[regime == "Oxygen limited"], na.rm = TRUE) else NA_real_,
+    pO2_max = if (n_oxlim > 0) max(pO2[regime == "Oxygen limited"], na.rm = TRUE) else NA_real_,
+    .groups = "drop_last"
+  ) %>%
+  ungroup() %>%
+  mutate(
+    ratio_raw = ifelse(n_oxlim == 0, NA_real_,
+                       ifelse(n_oxlim == 1 & singleton_as_one, 1, (pO2_max + eps) / (pO2_min + eps))),
+    ratio = ratio_raw
+  )
+
+# Pretty mass labels
+mass_lab <- function(m) ifelse(m >= 1000, paste0(signif(m/1000, 3), " kg"),
+                               paste0(signif(m, 3), " g"))
+ratio_df <- ratio_df %>%
+  mutate(mass_lab = factor(mass_lab(mass),
+                           levels = unique(mass_lab(sort(unique(mass))))))
+
+# -----------------------------
+# 2A) Plot: ratio vs Temperature (one line per mass)
+# -----------------------------
+p_ratio_lines <-
+  ggplot(ratio_df, aes(x = T, y = ratio, color = mass_lab)) +
+  geom_line(linewidth = 1) +
+  # scale_y_log10(breaks = c(1, 2, 5, 10),
+  #               labels = c("1", "2", "5", "10"),
+  #               minor_breaks = NULL) +
+  labs(x = "Temperature (°C)",
+       y = "max(pO₂) / min(pO₂) in O₂-limited band",
+       color = "Mass",
+       title = "Oxygen-limited pO₂ span (ratio) vs temperature",
+       subtitle = sprintf("feeding_level = %.2f; %s for single-cell spans",
+                          f_target,
+                          ifelse(singleton_as_one, "ratio=1", "ratio=NA"))) +
+  theme_minimal(base_size = 12)
+
+p_ratio_lines
+
+# -----------------------------
+# 2B) Optional heatmap: T × Mass with ratio as fill
+# -----------------------------
+p_ratio_heat <-
+  ratio_df %>%
+  mutate(mass_f = factor(mass_lab)) %>%
+  ggplot(aes(x = T, y = mass_f, fill = ratio)) +
+  geom_tile() +
+  scale_fill_viridis_c(#trans = "log10",
+                       #breaks = c(1, 2, 5, 10),
+                       na.value = "grey85",
+                       name = "max/min\n(pO₂)") +
+  labs(x = "Temperature (°C)", y = "Mass",
+       title = "Relative span of O₂-limited regime (pO₂ max/min)",
+       subtitle = sprintf("feeding_level = %.2f", f_target)) +
+  theme_minimal(base_size = 12)
+
+# print if desired
+p_ratio_heat
+```
+
+

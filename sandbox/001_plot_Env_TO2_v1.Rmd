@@ -1,0 +1,1101 @@
+---
+title: "plotO2_range"
+output: html_document
+date: "2025-07-15"
+---
+
+```{r}
+library(sf)
+library(rnaturalearth)
+library(ggpattern)
+library(terra)
+library(raster)
+
+library(here)
+library(tidyverse)
+library(reshape2)
+library(viridis)
+library(patchwork)
+library(pracma)
+library(scales)  # for rescale()
+library(rlang)
+
+library(doParallel)
+library(foreach)
+```
+
+# Define systems
+
+```{r}
+LOCAL_PATH <- "/../traits/obis/data"
+
+PATH <- paste0(gsub("scratch", "scratch", here()), LOCAL_PATH)                  ##PATH <- paste0(gsub("scratch", "project", here()), LOCAL_PATH)   ## use if environment can see mirrored Project folder
+
+pO2_df <- read.csv(paste0(PATH, "/woa_pO2.csv"))                                #read.csv(here("data/woa_pO2.csv"))             ## use if proximal
+T_df <- read.csv(paste0(PATH, "/woa18_95A4_t00an01.csv"))                       #read.csv(here("data/woa18_95A4_t00an01.csv"))  ## use if proximal
+```
+
+
+```{r}
+env_df <- read.csv(paste0(PATH, "/Input_GFDL.csv"))                           #read.csv(here("data/Input_global.csv"))        ## use if proximal
+
+env_df$lon360 <- ifelse(env_df$lon > 179.5, env_df$lon - 360, env_df$lon)
+
+env_df
+```
+
+```{r}
+coastal_atl <- filter(env_df, lat == 34.5 & lon == -121.5+360)
+coastal_pac <- filter(env_df, lat == 43.5 & lon == -68.5+360)
+equatorial_pac <- filter(env_df, lat == -0.5 & lon == -93.5+360)
+north_sea <- filter(env_df, lat == 55.5 & lon == 3.5)
+```
+
+________________________________________________________________________________
+
+# Environment
+
+```{r fig.height=13, fig.width=6, dpi=300}
+# --- 1) Build a 1° sf grid and aggregate env fields into it -------------------
+
+# Points -> sf (keep lon/lat in data for reference if helpful)
+pts_env <- st_as_sf(env_df, coords = c("lon360", "lat"), crs = 4326, remove = FALSE)
+
+# Make a global-ish 1° grid over the points' extent
+grid_1deg <- st_make_grid(pts_env, cellsize = c(1,1), what = "polygons", square = TRUE)
+grid_1deg <- st_sf(cell_id = seq_along(grid_1deg), geometry = grid_1deg)
+
+# Spatial join points to grid cells, then summarize by cell (mean of each temp)
+grid_env <- st_join(grid_1deg, pts_env, join = st_intersects, left = TRUE) |>
+  st_drop_geometry() |>
+  group_by(cell_id) |>
+  summarise(
+    Tp = mean(Tp, na.rm = TRUE),
+    Tm = mean(Tm, na.rm = TRUE),
+    Tb = mean(Tb, na.rm = TRUE),
+    pO2p = mean(pO2p, na.rm = TRUE),
+    pO2m = mean(pO2m, na.rm = TRUE),
+    pO2b = mean(pO2b, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  right_join(grid_1deg, by = "cell_id") |>
+  st_as_sf()
+
+# Land layer
+world <- ne_countries(scale = 10, returnclass = "sf")
+
+# 
+sym_lims <- function(x) {
+  L <- min(x, na.rm = TRUE)
+  U <- max(x, na.rm = TRUE)
+  c(L, U)
+}
+
+# ---- replace your map_panel() with a diverging version ----
+map_panel_diverging <- function(data, var, title, legend_title, limits, colors) {
+  ggplot(data) +
+    geom_sf(aes(fill = .data[[var]]), color = NA) +
+    geom_sf(data = world, fill = "black", color = "black") +
+    scale_fill_gradient(
+      low       = colors[1],      # negative end (keep your existing extreme)
+      high       = colors[2],        # 0 is white
+      limits    = limits, 
+      oob       = scales::squish, # clamp out-of-range to ends
+      na.value  = "transparent",
+      name      = legend_title,
+      guide     = guide_colorbar(
+        title.position = "top",
+        barwidth       = unit(10, "cm"),
+        barheight      = unit(0.4, "cm")
+      )
+    ) +
+    coord_sf(crs = "+proj=moll", expand = FALSE) +
+    labs(title = title) +
+    theme_minimal() +
+    theme(
+      panel.background = element_blank(),
+      plot.background  = element_blank(),
+      axis.text        = element_blank(),
+      axis.ticks       = element_blank(),
+      axis.title       = element_blank(),
+      legend.position  = "bottom",
+      legend.title     = element_text(size = 8),
+      plot.title       = element_text(size = 10, hjust = 0.5)
+    )
+}
+
+# ---- Temperature panels (shared symmetric limits) ----
+lims_Tp <- sym_lims(c(grid_env$Tp))
+lims_Tm <- sym_lims(c(grid_env$Tm))
+lims_Tb <- sym_lims(c(grid_env$Tb))
+
+p_Tp <- map_panel_diverging(
+  grid_env, "Tp",
+  title = "Pelagic temperature (°C)",
+  legend_title = expression("Pelagic T (°C)"),
+  colors = c("#5DA1C7", "#C85148"),
+  limits = lims_Tp
+)
+
+p_Tm <- map_panel_diverging(
+  grid_env, "Tm",
+  title = "Midwater temperature (°C)",
+  legend_title = expression("Midwater T (°C)"),
+  colors = c("#5DA1C7", "#C85148"),
+  limits = lims_Tm
+)
+
+p_Tb <- map_panel_diverging(
+  grid_env, "Tb",
+  title = "Bottom temperature (°C)",
+  legend_title = expression("Bottom T (°C)"),
+  colors = c("#5DA1C7", "#C85148"),
+  limits = lims_Tb
+)
+
+p_Tp / p_Tm / p_Tb
+
+# ---- Oxygen panels (shared symmetric limits) ----
+lims_pO2p <- sym_lims(c(grid_env$pO2p))
+lims_pO2m <- sym_lims(c(grid_env$pO2m))
+lims_pO2b <- sym_lims(c(grid_env$pO2b))
+
+p_pO2p <- map_panel_diverging(
+  grid_env, "pO2p",
+  title = "Pelagic oxygen (kPa)",
+  legend_title = expression("Pelagic pO"[2]*" (kPa)"),
+  colors = c("#D3D694", "#674776"),
+  limits = lims_pO2p
+)
+
+p_pO2m <- map_panel_diverging(
+  grid_env, "pO2m",
+  title = "Midwater oxygen (kPa)",
+  legend_title = expression("Midwater pO"[2]*" (kPa)"),
+  colors = c("#D3D694", "#674776"),
+  limits = lims_pO2m
+)
+
+p_pO2b <- map_panel_diverging(
+  grid_env, "pO2b",
+  title = "Bottom oxygen (kPa)",
+  legend_title = expression("Bottom pO"[2]*" (kPa)"),
+  colors = c("#D3D694", "#674776"),
+  limits = lims_pO2b
+)
+
+p_pO2p / p_pO2m / p_pO2b
+```
+
+```{r fig.height=12, fig.width=6, dpi=300}
+# --- 1) Build a 1° sf grid and aggregate env fields into it -------------------
+
+# Points -> sf (keep lon/lat in data for reference if helpful)
+pts_env <- st_as_sf(env_df, coords = c("lon360", "lat"), crs = 4326, remove = FALSE)
+
+# Make a global-ish 1° grid over the points' extent
+grid_1deg <- st_make_grid(pts_env, cellsize = c(1,1), what = "polygons", square = TRUE)
+grid_1deg <- st_sf(cell_id = seq_along(grid_1deg), geometry = grid_1deg)
+
+# Spatial join points to grid cells, then summarize by cell (mean of each temp)
+grid_env <- st_join(grid_1deg, pts_env, join = st_intersects, left = TRUE) |>
+  st_drop_geometry() |>
+  group_by(cell_id) |>
+  summarise(
+    Tp = mean(Tp_ssp585-Tp, na.rm = TRUE),
+    Tm = mean(Tm_ssp585-Tm, na.rm = TRUE),
+    Tb = mean(Tb_ssp585-Tb, na.rm = TRUE),
+    pO2p = mean(pO2p_ssp585-pO2p, na.rm = TRUE),
+    pO2m = mean(pO2m_ssp585-pO2m, na.rm = TRUE),
+    pO2b = mean(pO2b_ssp585-pO2b, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  right_join(grid_1deg, by = "cell_id") |>
+  st_as_sf()
+
+# Land layer
+world <- ne_countries(scale = 10, returnclass = "sf")
+
+# --- 2) Small helper to clone your style with plasma palette ------------------
+
+# helper: symmetric limits around 0
+sym_lims <- function(x) {
+  L <- max(abs(x), na.rm = TRUE)
+  c(-L, L)
+}
+
+# ---- replace your map_panel() with a diverging version ----
+map_panel_diverging <- function(data, var, title, legend_title, limits, colors) {
+  ggplot(data) +
+    geom_sf(aes(fill = .data[[var]]), color = NA) +
+    geom_sf(data = world, fill = "black", color = "black") +
+    scale_fill_gradient2(
+      low       = colors[1],      # negative end (keep your existing extreme)
+      mid       = "white",        # 0 is white
+      high      = colors[2],      # positive end (keep your existing extreme)
+      midpoint  = 0,
+      limits    = limits,         # symmetric around 0
+      oob       = scales::squish, # clamp out-of-range to ends
+      na.value  = "transparent",
+      name      = legend_title,
+      guide     = guide_colorbar(
+        title.position = "top",
+        barwidth       = unit(10, "cm"),
+        barheight      = unit(0.4, "cm")
+      )
+    ) +
+    coord_sf(crs = "+proj=moll", expand = FALSE) +
+    labs(title = title) +
+    theme_minimal() +
+    theme(
+      panel.background = element_blank(),
+      plot.background  = element_blank(),
+      axis.text        = element_blank(),
+      axis.ticks       = element_blank(),
+      axis.title       = element_blank(),
+      legend.position  = "bottom",
+      legend.title     = element_text(size = 8),
+      plot.title       = element_text(size = 10, hjust = 0.5)
+    )
+}
+
+# ---- Temperature panels (shared symmetric limits) ----
+lims_Tp <- sym_lims(c(grid_env$Tp))
+lims_Tm <- sym_lims(c(grid_env$Tm))
+lims_Tb <- sym_lims(c(grid_env$Tb))
+
+p_Tp <- map_panel_diverging(
+  grid_env, "Tp",
+  title = "Pelagic temperature Δ (°C)",
+  legend_title = expression("Pelagic ΔT (°C)"),
+  colors = c("#5DA1C7", "#C85148"),
+  limits = lims_Tb
+)
+
+p_Tm <- map_panel_diverging(
+  grid_env, "Tm",
+  title = "Midwater temperature Δ (°C)",
+  legend_title = expression("Midwater ΔT (°C)"),
+  colors = c("#5DA1C7", "#C85148"),
+  limits = lims_Tm
+)
+
+p_Tb <- map_panel_diverging(
+  grid_env, "Tb",
+  title = "Bottom temperature Δ (°C)",
+  legend_title = expression("Bottom ΔT (°C)"),
+  colors = c("#5DA1C7", "#C85148"),
+  limits = c(-3,3)
+)
+
+p_Tp / p_Tm / p_Tb
+
+# ---- Oxygen panels (shared symmetric limits) ----
+lims_pO2p <- sym_lims(c(grid_env$pO2p))
+lims_pO2m <- sym_lims(c(grid_env$pO2m))
+lims_pO2b <- sym_lims(c(grid_env$pO2b))
+
+p_pO2p <- map_panel_diverging(
+  grid_env, "pO2p",
+  title = "Pelagic oxygen Δ (kPa)",
+  legend_title = expression("Pelagic ΔpO"[2]*" (kPa)"),
+  colors = c("#D3D694", "#674776"),
+  limits = lims_pO2p
+)
+
+p_pO2m <- map_panel_diverging(
+  grid_env, "pO2m",
+  title = "Midwater oxygen Δ (kPa)",
+  legend_title = expression("Midwater ΔpO"[2]*" (kPa)"),
+  colors = c("#D3D694", "#674776"),
+  limits = c(-1,1)
+)
+
+p_pO2b <- map_panel_diverging(
+  grid_env, "pO2b",
+  title = "Bottom oxygen Δ (kPa)",
+  legend_title = expression("Bottom ΔpO"[2]*" (kPa)"),
+  colors = c("#D3D694", "#674776"),
+  limits = c(-1,1)
+)
+
+p_pO2p / p_pO2m / p_pO2b
+```
+
+```{r fig.height=10, fig.width=6, dpi=300}
+# --- 1) Build a 1° sf grid and aggregate env fields into it -------------------
+
+# Points -> sf (keep lon/lat in data for reference if helpful)
+pts_env <- st_as_sf(env_df, coords = c("lon360", "lat"), crs = 4326, remove = FALSE)
+
+# Make a global-ish 1° grid over the points' extent
+grid_1deg <- st_make_grid(pts_env, cellsize = c(1,1), what = "polygons", square = TRUE)
+grid_1deg <- st_sf(cell_id = seq_along(grid_1deg), geometry = grid_1deg)
+
+# Spatial join points to grid cells, then summarize by cell (mean of each temp)
+grid_env <- st_join(grid_1deg, pts_env, join = st_intersects, left = TRUE) |>
+  st_drop_geometry() |>
+  group_by(cell_id) |>
+  summarise(
+    Tp = mean(Tp_ssp585-Tp, na.rm = TRUE),
+    Tb = mean(Tb_ssp585-Tb, na.rm = TRUE),
+    pO2p = mean(pO2p_ssp585-pO2p, na.rm = TRUE),
+    pO2b = mean(pO2b_ssp585-pO2b, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  right_join(grid_1deg, by = "cell_id") |>
+  st_as_sf()
+
+# Land layer
+world <- ne_countries(scale = 10, returnclass = "sf")
+
+# --- 2) Small helper to clone your style with plasma palette ------------------
+
+# helper: symmetric limits around 0
+sym_lims <- function(x) {
+  L <- max(abs(x), na.rm = TRUE)
+  c(-L, L)
+}
+
+# ---- replace your map_panel() with a diverging version ----
+map_panel_diverging <- function(data, var, title, legend_title, limits, colors) {
+  ggplot(data) +
+    geom_sf(aes(fill = .data[[var]]), color = NA) +
+    geom_sf(data = world, fill = "black", color = "black") +
+    scale_fill_gradient2(
+      low       = colors[1],      # negative end (keep your existing extreme)
+      mid       = "white",        # 0 is white
+      high      = colors[2],      # positive end (keep your existing extreme)
+      midpoint  = 0,
+      limits    = limits,         # symmetric around 0
+      oob       = scales::squish, # clamp out-of-range to ends
+      na.value  = "transparent",
+      name      = legend_title,
+      guide     = guide_colorbar(
+        title.position = "top",
+        barwidth       = unit(10, "cm"),
+        barheight      = unit(0.4, "cm")
+      )
+    ) +
+    coord_sf(crs = "+proj=moll", expand = FALSE) +
+    labs(title = title) +
+    theme_minimal() +
+    theme(
+      panel.background = element_blank(),
+      plot.background  = element_blank(),
+      axis.text        = element_blank(),
+      axis.ticks       = element_blank(),
+      axis.title       = element_blank(),
+      legend.position  = "bottom",
+      legend.title     = element_text(size = 8),
+      plot.title       = element_text(size = 10, hjust = 0.5)
+    )
+}
+
+# ---- Temperature panels (shared symmetric limits) ----
+lims_Tp <- sym_lims(c(grid_env$Tp))
+lims_Tb <- sym_lims(c(grid_env$Tb))
+
+p_Tp <- map_panel_diverging(
+  grid_env, "Tp",
+  title = "Pelagic temperature Δ (°C)",
+  legend_title = expression("Pelagic ΔT (°C)"),
+  colors = c("#5DA1C7", "#C85148"),
+  limits = lims_Tb
+)
+
+p_Tb <- map_panel_diverging(
+  grid_env, "Tb",
+  title = "Bottom temperature Δ (°C)",
+  legend_title = expression("Bottom ΔT (°C)"),
+  colors = c("#5DA1C7", "#C85148"),
+  limits = c(-3,3)
+)
+
+p_Tp / p_Tb
+
+# ---- Oxygen panels (shared symmetric limits) ----
+lims_pO2p <- sym_lims(c(grid_env$pO2p))
+lims_pO2b <- sym_lims(c(grid_env$pO2b))
+
+p_pO2p <- map_panel_diverging(
+  grid_env, "pO2p",
+  title = "Pelagic oxygen Δ (kPa)",
+  legend_title = expression("Pelagic ΔpO"[2]*" (kPa)"),
+  colors = c("#D3D694", "#674776"),
+  limits = lims_pO2p
+)
+
+p_pO2b <- map_panel_diverging(
+  grid_env, "pO2b",
+  title = "Bottom oxygen Δ (kPa)",
+  legend_title = expression("Bottom ΔpO"[2]*" (kPa)"),
+  colors = c("#D3D694", "#674776"),
+  limits = c(-1,1)
+)
+
+p_pO2p / p_pO2b
+```
+
+```{r fig.height=10, fig.width=6, dpi=300}
+# --- Helpers ---------------------------------------------------------------
+
+# classify into {- , 0 , +} with an optional zero tolerance band (in data units)
+classify_sign <- function(x, zero_tol = 0){
+  cls <- dplyr::case_when(
+    x >  zero_tol            ~ "positive",
+    x < -zero_tol            ~ "negative",
+    is.finite(x)             ~ "zero",
+    TRUE                     ~ NA_character_
+  )
+  factor(cls, levels = c("negative","zero","positive"))
+}
+
+# three-color panel (Mollweide), using the sign classes
+map_panel_three <- function(data, var, title, legend_title, zero_tol = 0){
+  df_plot <- data %>%
+    dplyr::mutate(sign_class = classify_sign(.data[[var]], zero_tol))
+
+  ggplot(df_plot) +
+    geom_sf(aes(fill = sign_class), color = NA) +
+    geom_sf(data = world, fill = "black", color = "black") +
+    scale_fill_manual(
+      values = c(negative = "#D3D694", zero = "white", positive = "#674776"),
+      drop = FALSE,
+      name = legend_title,
+      labels = c("Decrease (<0)", "No change (~0)", "Increase (>0)")
+    ) +
+    coord_sf(crs = "+proj=moll", expand = FALSE) +
+    labs(title = title) +
+    theme_minimal() +
+    theme(
+      panel.background = element_blank(),
+      plot.background  = element_blank(),
+      axis.text        = element_blank(),
+      axis.ticks       = element_blank(),
+      axis.title       = element_blank(),
+      legend.position  = "bottom",
+      legend.title     = element_text(size = 8),
+      plot.title       = element_text(size = 10, hjust = 0.5)
+    )
+}
+
+
+# e.g., treat |ΔpO2| < 0.05 kPa as "zero"
+z_tol <- 0.5
+
+p_pO2p_sign <- map_panel_three(
+  grid_env, "pO2p",
+  title = "Pelagic oxygen change (sign)",
+  legend_title = expression(Delta*pO[2]*" sign"),
+  zero_tol = z_tol
+)
+
+p_pO2b_sign <- map_panel_three(
+  grid_env, "pO2b",
+  title = "Bottom oxygen change (sign)",
+  legend_title = expression(Delta*pO[2]*" sign"),
+  zero_tol = z_tol
+)
+
+p_pO2p_sign / p_pO2b_sign
+```
+
+
+```{r fig.height=10, fig.width=6, dpi=300}
+# helper: symmetric limits around 0
+sym_lims <- function(x) {
+  L <- max(abs(x), na.rm = TRUE)
+  c(-L, L)
+}
+
+# ---- replace your map_panel() with a diverging version ----
+map_panel_diverging <- function(data, var, title, legend_title, limits, colors) {
+  ggplot(data) +
+    geom_sf(aes(fill = .data[[var]]), color = NA) +
+    geom_sf(data = world, fill = "black", color = "black") +
+    scale_fill_gradient2(
+      low       = colors[1],      # negative end (keep your existing extreme)
+      mid       = "white",        # 0 is white
+      high      = colors[2],      # positive end (keep your existing extreme)
+      midpoint  = 0,
+      limits    = limits,         # symmetric around 0
+      oob       = scales::squish, # clamp out-of-range to ends
+      na.value  = "transparent",
+      name      = legend_title,
+      guide     = guide_colorbar(
+        title.position = "top",
+        barwidth       = unit(10, "cm"),
+        barheight      = unit(0.4, "cm")
+      )
+    ) +
+    coord_sf(crs = "+proj=moll", expand = FALSE) +
+    labs(title = title) +
+    theme_minimal() +
+    theme(
+      panel.background = element_blank(),
+      plot.background  = element_blank(),
+      axis.text        = element_blank(),
+      axis.ticks       = element_blank(),
+      axis.title       = element_blank(),
+      legend.position  = "bottom",
+      legend.title     = element_text(size = 8),
+      plot.title       = element_text(size = 10, hjust = 0.5)
+    )
+}
+
+# ---- Temperature panels (shared symmetric limits) ----
+lims_T <- sym_lims(c(grid_env$Tp, grid_env$Tb))
+
+p_Tp <- map_panel_diverging(
+  grid_env, "Tp",
+  title = "Pelagic temperature Δ (°C)",
+  legend_title = expression("Pelagic ΔT (°C)"),
+  colors = c("#5DA1C7", "#C85148"),
+  limits = lims_T
+)
+
+p_Tb <- map_panel_diverging(
+  grid_env, "Tb",
+  title = "Bottom temperature Δ (°C)",
+  legend_title = expression("Bottom ΔT (°C)"),
+  colors = c("#5DA1C7", "#C85148"),
+  limits = lims_T
+)
+
+p_Tp / p_Tb
+
+# ---- Oxygen panels (shared symmetric limits) ----
+lims_pO2 <- sym_lims(c(grid_env$pO2p, grid_env$pO2b))
+
+p_pO2p <- map_panel_diverging(
+  grid_env, "pO2p",
+  title = "Pelagic oxygen Δ (kPa)",
+  legend_title = expression("Pelagic ΔpO"[2]*" (kPa)"),
+  colors = c("#D3D694", "#674776"),
+  limits = lims_pO2
+)
+
+p_pO2b <- map_panel_diverging(
+  grid_env, "pO2b",
+  title = "Bottom oxygen Δ (kPa)",
+  legend_title = expression("Bottom ΔpO"[2]*" (kPa)"),
+  colors = c("#D3D694", "#674776"),
+  limits = lims_pO2
+)
+
+p_pO2p / p_pO2b
+```
+
+
+```{r}
+# 1) Area weights (1° grid): proportional to cos(latitude)
+env_w <- env_df %>%
+  mutate(weight = pmax(0, cos(pi * lat / 180)))  # guard against tiny negatives at poles
+
+# 2) Shared bin edges across all depths so panels are directly comparable
+T_all   <- c(env_w$Tp, env_w$Tm, env_w$Tb)
+O2_all  <- c(env_w$pO2p, env_w$pO2m, env_w$pO2b)
+
+T_range <- range(T_all,  na.rm = TRUE)
+O2_range <- range(O2_all, na.rm = TRUE)
+
+# Choose sensible bin widths; tweak as you like
+dT  <- 1.0
+dO2 <- 1.0
+T_breaks  <- seq(floor(T_range[1]), ceiling(T_range[2]), by = dT)
+O2_breaks <- seq(floor(O2_range[1]), ceiling(O2_range[2]), by = dO2)
+
+# Helper to make a weighted T–pO2 surface for one depth
+make_surface <- function(df, T_col, O2_col, depth_label, T_breaks, O2_breaks) {
+  T_sym  <- rlang::ensym(T_col)
+  O2_sym <- rlang::ensym(O2_col)
+
+  bin_center <- function(brks) head(brks, -1) + diff(brks) / 2
+
+  dat <- df %>%
+    dplyr::filter(!is.na(!!T_sym), !is.na(!!O2_sym), weight > 0) %>%
+    dplyr::mutate(
+      T_bin  = cut(!!T_sym,  breaks = T_breaks, include.lowest = TRUE, right = FALSE),
+      O2_bin = cut(!!O2_sym, breaks = O2_breaks, include.lowest = TRUE, right = FALSE)
+    )
+
+  denom <- sum(dat$weight, na.rm = TRUE)
+
+  surf <- dat %>%
+    dplyr::group_by(T_bin, O2_bin) %>%
+    dplyr::summarise(wsum = sum(weight, na.rm = TRUE), .groups = "drop") %>%
+    tidyr::complete(T_bin, O2_bin, fill = list(wsum = 0)) %>%
+    dplyr::mutate(
+      pct     = 100 * wsum / denom,
+      pct_plot = ifelse(pct <= 0, NA_real_, pct),     # <= 0 becomes transparent
+      depth   = depth_label,
+      T_mid   = bin_center(T_breaks)[as.integer(T_bin)],
+      O2_mid  = bin_center(O2_breaks)[as.integer(O2_bin)]
+    ) %>%
+    dplyr::select(depth, T_mid, O2_mid, pct, pct_plot)
+
+  return(surf)
+}
+
+# 3) Build surfaces for each depth
+surf_p <- make_surface(env_w, "Tp", "pO2p", "Pelagic",  T_breaks, O2_breaks)
+surf_m <- make_surface(env_w, "Tm", "pO2m", "Midwater", T_breaks, O2_breaks)
+surf_b <- make_surface(env_w, "Tb", "pO2b", "Bottom",   T_breaks, O2_breaks)
+
+surf_all <- dplyr::bind_rows(surf_p, surf_m, surf_b)
+
+# Limits based on positive coverage only
+pct_lims <- range(surf_all$pct_plot, na.rm = TRUE)
+
+p_cov <- ggplot(surf_all, aes(x = T_mid, y = O2_mid, fill = pct_plot)) +
+  geom_tile(color = NA) +
+  facet_wrap(~ depth, nrow = 1) +
+  scale_fill_viridis(
+    option  = "viridis",
+    limits  = pct_lims,
+    name    = "% of ocean",
+    labels  = function(x) paste0(round(x), "%"),
+    na.value = "transparent"   # <- make zeros clear
+  ) +
+  # scale_fill_gradient(
+  #     low    = "#5DA1C7", #"#0571b0",
+  #     high   = "#C85148", #"#ca0020",
+  #     limits  = pct_lims,
+  #     name    = "% of ocean",
+  #     labels  = function(x) paste0(round(x), "%"),
+  #     na.value = "transparent"   # <- make zeros clear
+  #   )
+  labs(
+    x = "Temperature (°C)",
+    y = expression(paste("pO"[2], " (kPa)"))
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid.minor = element_blank(),
+    legend.position  = "bottom",
+    legend.title     = element_text(size = 9)
+  )
+
+p_cov
+```
+
+
+```{r}
+#--------------------------
+# 0) Helpers
+#--------------------------
+
+# Parse depth columns like "X0","X5","X375" -> numeric meters
+to_long_depth <- function(df, value_name) {
+  depth_cols <- grep("^X\\d+$", names(df), value = TRUE)
+  df %>%
+    dplyr::select(LATITUDE, LONGITUDE, dplyr::all_of(depth_cols)) %>%
+    tidyr::pivot_longer(
+      cols      = dplyr::all_of(depth_cols),
+      names_to  = "depth_str",
+      values_to = value_name
+    ) %>%
+    dplyr::mutate(depth_m = as.numeric(sub("^X", "", depth_str))) %>%
+    dplyr::select(-depth_str)
+}
+
+# Infer global grid spacing (median Δlat, Δlon in degrees)
+infer_grid_spacing <- function(lat_vec, lon_vec) {
+  dlat <- lat_vec %>% unique() %>% sort() %>% diff() %>% abs()
+  dlon <- lon_vec %>% unique() %>% sort() %>% diff() %>% abs()
+  tibble::tibble(
+    dlat = stats::median(dlat, na.rm = TRUE),
+    dlon = stats::median(dlon, na.rm = TRUE)
+  )
+}
+
+# Cell area (m^2) at latitude for a lat-lon cell of size dlat × dlon (degrees)
+cell_area_m2 <- function(lat_deg, dlat_deg, dlon_deg) {
+  R <- 6371000
+  lat  <- lat_deg  * pi/180
+  dlat <- dlat_deg * pi/180
+  dlon <- dlon_deg * pi/180
+  (R^2) * abs(sin(lat + dlat/2) - sin(lat - dlat/2)) * dlon
+}
+
+# Compute layer top/bottom and thickness at each sample depth (per location)
+# Uses half-gap to neighbors; topmost extends to 0 m; bottommost extends by half of upper gap
+# If only one depth exists, uses default_half_thickness_m on both sides.
+add_layer_thickness <- function(df_loc, default_half_thickness_m = 50) {
+  df_loc <- df_loc %>% dplyr::arrange(depth_m)
+
+  gap_up   <- df_loc$depth_m - dplyr::lag(df_loc$depth_m)
+  gap_down <- dplyr::lead(df_loc$depth_m) - df_loc$depth_m
+
+  top    <- ifelse(is.na(gap_up),
+                   0,
+                   df_loc$depth_m - gap_up/2)
+  bottom <- ifelse(is.na(gap_down),
+                   df_loc$depth_m + ifelse(is.na(gap_up), default_half_thickness_m, gap_up/2),
+                   df_loc$depth_m + gap_down/2)
+
+  df_loc$layer_top_m    <- top
+  df_loc$layer_bottom_m <- bottom
+  df_loc$layer_thick_m  <- pmax(0, bottom - top)
+  df_loc
+}
+
+# Overlap of a layer with a regime [zmin, zmax] (meters; positive down)
+overlap_thickness <- function(layer_top, layer_bottom, zmin, zmax) {
+  pmax(0, pmin(layer_bottom, zmax) - pmax(layer_top, zmin))
+}
+
+# Bin edges (shared across depths/regimes)
+make_breaks <- function(x, binwidth = NULL, n = 40) {
+  rng <- range(x, na.rm = TRUE)
+  if (is.null(binwidth)) {
+    pretty(rng, n = n)
+  } else {
+    seq(floor(rng[1]/binwidth)*binwidth, ceiling(rng[2]/binwidth)*binwidth, by = binwidth)
+  }
+}
+
+# 2D binning into sum(volume) with zeros kept; returns bin centers for plotting
+bin_volume_2d <- function(df, T_col, O2_col, vol_col, T_breaks, O2_breaks, depth_label) {
+  T_sym  <- rlang::ensym(T_col)
+  O2_sym <- rlang::ensym(O2_col)
+  V_sym  <- rlang::ensym(vol_col)
+
+  # function for centers
+  bin_center <- function(brks) head(brks, -1) + diff(brks)/2
+
+  df %>%
+    dplyr::filter(!is.na(!!T_sym), !is.na(!!O2_sym), !is.na(!!V_sym), !!V_sym > 0) %>%
+    dplyr::mutate(
+      T_bin  = cut(!!T_sym,  breaks = T_breaks, include.lowest = TRUE, right = FALSE),
+      O2_bin = cut(!!O2_sym, breaks = O2_breaks, include.lowest = TRUE, right = FALSE)
+    ) %>%
+    dplyr::group_by(T_bin, O2_bin) %>%
+    dplyr::summarise(volume_m3 = sum(!!V_sym, na.rm = TRUE), .groups = "drop") %>%
+    tidyr::complete(T_bin, O2_bin, fill = list(volume_m3 = 0)) %>%
+    dplyr::mutate(
+      T_mid  = bin_center(T_breaks)[as.integer(T_bin)],
+      O2_mid = bin_center(O2_breaks)[as.integer(O2_bin)],
+      depth  = depth_label,
+      volume_km3 = volume_m3 / 1e9  # optional unit for nicer legend
+    ) %>%
+    dplyr::select(depth, T_mid, O2_mid, volume_m3, volume_km3)
+}
+
+#--------------------------
+# 1) Prepare long-form data and areas
+#--------------------------
+
+T_long  <- to_long_depth(T_df,   "T")
+O2_long <- to_long_depth(pO2_df, "pO2")
+
+# Keep only rows where at least one of T or pO2 is present; we’ll filter per regime later
+df_long <- dplyr::full_join(
+  T_long, O2_long,
+  by = c("LATITUDE","LONGITUDE","depth_m")
+)
+
+# Infer spacing and compute cell area per (lat, lon)
+sp <- infer_grid_spacing(df_long$LATITUDE, df_long$LONGITUDE)
+df_long <- df_long %>%
+  dplyr::mutate(cell_area_m2 = cell_area_m2(LATITUDE, sp$dlat, sp$dlon))
+
+# Assign layer thickness per (lat, lon)
+df_long <- df_long %>%
+  dplyr::group_by(LATITUDE, LONGITUDE) %>%
+  dplyr::group_modify(~ add_layer_thickness(.x)) %>%
+  dplyr::ungroup()
+
+#--------------------------
+# 2) Regime-specific volumes
+#--------------------------
+
+# Pelagic: 0–100 m
+pelagic <- df_long %>%
+  dplyr::mutate(
+    overlap_m = overlap_thickness(layer_top_m, layer_bottom_m, 0, 100),
+    vol_m3    = cell_area_m2 * overlap_m
+  ) %>%
+  dplyr::filter(overlap_m > 0, !is.na(T), !is.na(pO2))
+
+# Midwater: 500–1500 m (skip rows without those depths by overlap=0)
+midwater <- df_long %>%
+  dplyr::mutate(
+    overlap_m = overlap_thickness(layer_top_m, layer_bottom_m, 500, 1500),
+    vol_m3    = cell_area_m2 * overlap_m
+  ) %>%
+  dplyr::filter(overlap_m > 0, !is.na(T), !is.na(pO2))
+
+# Bottom: deepest non-NA T & pO2 per location
+bottom_candidates <- df_long %>%
+  dplyr::filter(!is.na(T), !is.na(pO2)) %>%
+  dplyr::group_by(LATITUDE, LONGITUDE) %>%
+  dplyr::filter(depth_m == max(depth_m, na.rm = TRUE)) %>%
+  dplyr::ungroup()
+
+bottom <- bottom_candidates %>%
+  dplyr::mutate(
+    # use full layer thickness around that deepest sample
+    overlap_m = pmax(0, layer_thick_m),
+    vol_m3    = cell_area_m2 * overlap_m
+  ) %>%
+  dplyr::filter(overlap_m > 0)
+```
+
+
+```{r}
+#--------------------------
+# 3) Shared bins and 2D volume histograms
+#--------------------------
+T_all   <- c(pelagic$T, midwater$T, bottom$T)
+O2_all  <- c(pelagic$pO2, midwater$pO2, bottom$pO2)
+
+T_breaks  <- make_breaks(T_all,  binwidth = 0.5)   # 1 °C bins (tune as needed)
+O2_breaks <- make_breaks(O2_all, binwidth = 0.5)   # 1 kPa bins (tune as needed)
+
+surf_p <- bin_volume_2d(pelagic, "T", "pO2", "vol_m3", T_breaks, O2_breaks, "Pelagic (0–100 m)")
+surf_m <- bin_volume_2d(midwater, "T", "pO2", "vol_m3", T_breaks, O2_breaks, "Midwater (500–1500 m)")
+surf_b <- bin_volume_2d(bottom,   "T", "pO2", "vol_m3", T_breaks, O2_breaks, "Bottom (deepest sampled)")
+
+surf_all <- dplyr::bind_rows(surf_p, surf_m, surf_b)
+
+# Optional: drop true zeros so they plot "clear"
+surf_all <- surf_all %>%
+  dplyr::mutate(volume_km3_plot = dplyr::if_else(volume_km3 <= 0, NA_real_, volume_km3))
+
+depth_order <- c("Pelagic (0–100 m)", "Midwater (500–1500 m)", "Bottom (deepest sampled)")
+
+surf_all <- surf_all %>% dplyr::mutate(depth = factor(depth, levels = depth_order))
+
+panel_plot <- function(df, title, fill_var = "volume_km3_plot", legend_title = "Ocean volume (km³)") {
+  ggplot(df, aes(T_mid, O2_mid, fill = .data[[fill_var]])) +
+    geom_tile() +
+    scale_fill_viridis(option = "viridis", name = legend_title, na.value = "transparent") +
+    labs(title = title, x = "Temperature (°C)", y = expression(paste("pO"[2], " (kPa)"))) +
+    theme_minimal() +
+    theme(
+      legend.position  = "bottom",
+      legend.title     = element_text(size = 9),
+      panel.grid.minor = element_blank()
+  )
+}
+
+pvol_1 <- panel_plot(dplyr::filter(surf_all, depth == depth_order[1]), "Pelagic")
+pvol_2 <- panel_plot(dplyr::filter(surf_all, depth == depth_order[2]), "Midwater") +
+      theme(axis.title.y = element_blank())  # tidy center panel
+pvol_3 <- panel_plot(dplyr::filter(surf_all, depth == depth_order[3]), "Bottom") +
+      theme(axis.title.y = element_blank())
+
+pvol_1 + pvol_2 + pvol_3
+```
+
+```{r}
+surf_all_pct <- surf_all %>%
+  dplyr::group_by(depth) %>%
+  dplyr::mutate(pct = 100 * volume_m3 / sum(volume_m3, na.rm = TRUE)) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(pct_plot = dplyr::if_else(pct <= 0, NA_real_, pct)) %>%
+  dplyr::mutate(pctlog_plot = log10(pct_plot))
+
+surf_all_pct <- surf_all_pct %>%
+  dplyr::mutate(depth = factor(depth, levels = depth_order))
+
+
+panel_plot <- function(df, title, fill_var = "pctlog_plot", legend_title = "Ocean \nvolume\n(log %)") {
+  ggplot(df, aes(T_mid, O2_mid, fill = .data[[fill_var]])) +
+    geom_tile() +
+    scale_fill_viridis(option = "viridis", name = legend_title, na.value = "transparent") +
+    labs(title = title, x = "Temperature (°C)", y = expression(paste("pO"[2], " (kPa)"))) +
+    theme_minimal() +
+    theme(
+      legend.position  = "bottom",
+      legend.title     = element_text(size = 9),
+      panel.grid.minor = element_blank()
+  )
+}
+
+pper_1 <- panel_plot(dplyr::filter(surf_all_pct, depth == depth_order[1]), "Pelagic")
+pper_2 <- panel_plot(dplyr::filter(surf_all_pct, depth == depth_order[2]), "Midwater") +
+      theme(axis.title.y = element_blank())  # tidy center panel
+pper_3 <- panel_plot(dplyr::filter(surf_all_pct, depth == depth_order[3]), "Bottom") +
+      theme(axis.title.y = element_blank())
+
+pper_1 + pper_2 + pper_3
+```
+
+
+# REFERENCE
+
+```{r eval=FALSE, include=FALSE}
+#{r fig.height=6, fig.width=10}
+# 1) Turn your env_df into an sf grid exactly as before
+grid_env <- st_as_sf(env_df, coords = c("lon360","lat"), crs = 4326)
+
+grid_env_diff <- st_as_sf(
+  grid_env %>% 
+    st_make_grid(cellsize = 1, what = "polygons")
+) %>% 
+  st_join(grid_env, join = st_intersects, left = TRUE)
+
+world <- ne_countries(scale = 10, returnclass = "sf")
+
+# 2) Plot Tp with a “plasma” palette (blue→yellow→red)
+p_T <- ggplot(grid_env_diff) +
+  geom_sf(aes(fill = Tp), color = NA) +
+  geom_sf(data = world, fill = "black", color = "black") +
+  
+  scale_fill_gradient(
+    low    = "#5DA1C7", #"#0571b0",
+    high   = "#C85148", #"#ca0020",
+    #limits = c(tp_min, tp_max),
+    name   = expression("Pelagic temperature (°C)"),
+    guide   = guide_colorbar(
+      title.position = "top",
+      barwidth       = unit(10, "cm"),
+      barheight      = unit(0.4, "cm")
+    )
+  ) +
+  
+  coord_sf(crs    = "+proj=moll", 
+           expand = FALSE) +
+  
+  theme_minimal() +
+  theme(
+    panel.background = element_blank(),
+    plot.background  = element_blank(),
+    axis.text        = element_blank(),
+    axis.ticks       = element_blank(),
+    axis.title       = element_blank(),
+    legend.position  = "bottom",
+    legend.title     = element_text(size = 8),
+    plot.title       = element_text(size = 10, hjust = 0.5)
+  )
+
+p_T
+```
+
+```{r eval=FALSE, include=FALSE}
+ggsave(
+  filename = "p_Tp.png",
+  plot     = p_T,    # omit this if it's the last displayed plot
+  width    = 10,            # inches
+  height   = 6,            # inches
+  dpi      = 300           # resolution
+)
+```
+
+
+```{r eval=FALSE, fig.height=6, fig.width=10, include=FALSE}
+# 1) Turn your env_df into an sf grid exactly as before
+grid_env <- st_as_sf(env_df, coords = c("lon360","lat"), crs = 4326)
+
+grid_env_diff <- st_as_sf(
+  grid_env %>% 
+    st_make_grid(cellsize = 1, what = "polygons")
+) %>% 
+  st_join(grid_env, join = st_intersects, left = TRUE)
+
+world <- ne_countries(scale = 10, returnclass = "sf")
+
+# 2) Plot Tp with a “plasma” palette (blue→yellow→red)
+p_O <- ggplot(grid_env_diff) +
+  geom_sf(aes(fill = pO2p), color = NA) +
+  geom_sf(data = world, fill = "black", color = "black") +
+  
+  scale_fill_gradient(
+    low    = "#D6D893",
+    high   = "#674777",
+    #limits = c(tp_min, tp_max),
+    name   = expression("Pelagic oxygen partial pressure (kPa)"),
+    guide   = guide_colorbar(
+      title.position = "top",
+      barwidth       = unit(10, "cm"),
+      barheight      = unit(0.4, "cm")
+    )
+  ) +
+  
+  coord_sf(crs    = "+proj=moll", 
+           expand = FALSE) +
+  
+  theme_minimal() +
+  theme(
+    panel.background = element_blank(),
+    plot.background  = element_blank(),
+    axis.text        = element_blank(),
+    axis.ticks       = element_blank(),
+    axis.title       = element_blank(),
+    legend.position  = "bottom",
+    legend.title     = element_text(size = 8),
+    plot.title       = element_text(size = 10, hjust = 0.5)
+  )
+
+p_O
+```
+
+```{r eval=FALSE}
+ggsave(
+  filename = "p_pO2p.png",
+  plot     = p_O,    # omit this if it's the last displayed plot
+  width    = 10,            # inches
+  height   = 6,            # inches
+  dpi      = 300           # resolution
+)
+```
+
+
+```{r eval=FALSE}
+grid_biomass <- st_as_sf(out, coords = c("lon360","lat"), crs = 4326)
+grid_diff_biomass <- st_as_sf(
+  grid_biomass %>% 
+    st_make_grid(cellsize = 1, what = "polygons")
+) %>% 
+  st_join(grid_biomass, join = st_intersects, left = TRUE)
+
+map_bbox   <- st_as_sfc(st_bbox(grid_diff_biomass), crs = st_crs(grid_diff_biomass))
+
+world <- ne_countries(scale = 10, returnclass = "sf")
+
+# 2) plot with log10 colorbar in scientific notation + border
+p_preyDensity <- ggplot(grid_diff_biomass) +
+  geom_sf(aes(fill = preyDensity_largepel3 + 1e-6), color = NA) + 
+  geom_sf(data = world,   col = "black", fill = "black") +
+  
+  scale_fill_viridis_c(
+    trans   = "log10",
+    limits  = c(1e-6, global_max),
+    labels  = scales::label_scientific(),
+    na.value= "black",
+    name    = expression("Prey density (g/m"^2*")"),
+    guide   = guide_colorbar(
+      title.position = "top",
+      barwidth       = unit(10, "cm"),
+      barheight      = unit(0.4, "cm")
+    )
+  ) +
+  
+  coord_sf(crs = "+proj=moll", expand = FALSE) +
+  theme_minimal() +
+  theme(
+    plot.background  = element_blank(),
+    panel.background = element_blank(),
+    axis.text        = element_blank(),
+    axis.ticks       = element_blank(),
+    axis.title       = element_blank(),
+    legend.position  = "bottom",
+    legend.title     = element_text(size = 8),
+    plot.title       = element_text(size = 10, hjust = 0.5)
+  )
+
+p_preyDensity
+```
+
+```{r eval=FALSE}
+ggsave(
+  filename = "p_preyDensity.png",
+  plot     = p_preyDensity,    # omit this if it's the last displayed plot
+  width    = 10,            # inches
+  height   = 6,            # inches
+  dpi      = 300           # resolution
+)
+```
