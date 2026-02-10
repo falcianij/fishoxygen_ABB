@@ -34,7 +34,7 @@ trait_list <- list(
     a_a = 80, b_R = 0.85, #0.58,                                                 # active metabolism scale, speed geometry (p = 3 - b_R); a_a = 80
     a_g = 3, hm = 1,                                                            # gill diffusion: S = A_g*(pO2_env - pO2_int)*Q10_o/hm
     f_m = 0.1, a_m = 1,  b_m = 0.75,                                            # basal metabolism scale (fraction of a_c); f_m = 0.1
-    a_e = 200, b_e=2/3,                                                         # encounter
+    a_e = 200, b_e=2/3, #200 #2/3                                                         # encounter
     a_c = 60, b_c = 0.75, epsAssim = 0.7, alpha = 0.2,                          # consumption (+ SDA fraction alpha)
     T_ref = 10,
     Q10_m = 2.00, Q10_a = 1.80, Q10_o = 1.50, Q10_c = 2.00                      # temperature Q10s
@@ -108,8 +108,8 @@ theme_hide_y_labels <- function() {
 
 ```{r}
 # Parameters
-mass   <- 1e4                                                                   # [g] 1e3
-T      <- 10                                                                    # [°C]
+mass   <- 1e0                                                                   # [g] 1e3
+T      <- 5                                                                    # [°C]
 f_seq  <- seq(0.0, 1.0, by = 0.002)                                             # []
 pO2seq <- seq(0, 30, by=0.05)                                                   # [kPa]
 
@@ -124,53 +124,7 @@ surf_Fbudgets <- compute_state_surface(
   pair_mode = "cross"
 )
 
-surf_Fbudgets <- add_B_gradients(surf_Fbudgets, tr, method = "perturb", use_norm  = TRUE, prey_axis = "B", d_rel = 0.05, progress = TRUE)
-```
-
-
-```{r}
-check_transect <- function(tr, mass, Tval, pO2val,
-                           fseq = seq(0, 0.99, length.out = 100)) {
-  dat <- purrr::map_dfr(fseq, function(fref) {
-    B <- B_from_f(fref, mass, tr,
-                     T_ref = tr$T_ref, pO2_ref = pO2val,
-                     U_lo = 1e-3, U_mech = 5,
-                     enforce_O2_feasible = TRUE,
-                     eps_f = 1e-8)
-    st <- find_U_opt(pO2_env = pO2val, T = Tval, m = mass, prey = B, tr = tr)
-    tibble::tibble(
-      B      = B,
-      f      = fref,
-      E_net  = st$E_net / st$Cmax,
-      U_opt  = st$U_opt,
-      O2_sup = st$O2_supply,
-      O2_dem = st$O2_demand
-    )
-  }) %>%
-    mutate(O2_margin = O2_dem / O2_sup)
-
-  p1 <- ggplot(dat, aes(B, E_net)) +
-    geom_line() +
-    scale_x_log10() +
-    geom_hline(yintercept = 0, linetype = 2)
-
-  p2 <- ggplot(dat, aes(B, O2_margin)) +
-    geom_line() +
-    scale_x_log10() +
-    geom_hline(yintercept = 0, linetype = 2)
-
-  list(data = dat, p_E = p1, p_O2 = p2)
-}
-
-
-res <- check_transect(tr, mass = 1e0, Tval = 10, pO2val = 10)
-res$p_E   # E vs B (log B)
-res$p_O2  # O2 margin vs B
-
-
-res <- check_transect(tr, mass = 1e4, Tval = 10, pO2val = 10)
-res$p_E   # E vs B (log B)
-res$p_O2  # O2 margin vs B
+surf_Fbudgets <- add_regime_labels_ingestion(surf_Fbudgets)
 ```
 
 
@@ -436,6 +390,44 @@ p_Eavail_Fbudgets
 #        width = 7, height = 5, units = "in", dpi = 500)
 
 
+## ---Feeding level---
+Eavail_na  <- dplyr::filter(surf_Fbudgets, !is.finite(f) | is.na(f))
+Eavail_neg <- dplyr::filter(surf_Fbudgets,  is.finite(f) & f < 0)
+Eavail_pos <- dplyr::filter(surf_Fbudgets,  is.finite(f) & f >= 0) %>%
+  dplyr::mutate(E_pos = f)
+
+E_breaks <- seq(0, 1, by = 0.2)
+E_labels <- sprintf("%.1f", E_breaks)
+
+p_flvl_Fbudgets <- ggplot() +
+  geom_raster(data = Eavail_na,  aes(f_ref, pO2), fill = "gray60", interpolate = TRUE) + # NA regions: gray, here 
+  geom_raster(data = Eavail_neg, aes(f_ref, pO2), fill = "gray60", interpolate = TRUE) + # NEGATIVE region: gray
+  geom_raster(data = Eavail_pos, aes(f_ref, pO2, fill = pmin(E_pos, 1)), interpolate = TRUE) + # POSITIVE region: white -> blue gradient (capped to per-column vmax)
+  scale_fill_gradient(
+    low = "white", high = "#67A5CA", na.value = "gray60",
+    limits = c(0, 1), breaks = E_breaks, labels = E_labels,                     # <- extremes tied to max positive
+    oob = scales::squish,                                                       # <- clamp out-of-bounds values
+    #name   = expression("Available energy,"~nu~"(normalized by " * C[max] * ")"),
+    name   = expression("Realized feeding level"),
+    guide = legend_bar_guide(E_breaks, E_labels)
+  ) +
+  geom_contour(
+    inherit.aes = FALSE,
+    data = Eavail_pos, aes(x = f_ref, y = pO2, z = E_pos),
+    breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0), colour = "black", linewidth = 0.3, alpha = 1, linetype="dashed") +
+  labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~"(kPa)")#,
+       #title = paste("Available Energy")
+       ) +
+  scale_x_continuous(breaks = seq(min(f_seq), max(f_seq), by = 0.2), expand = c(0, 0)) +
+  scale_y_continuous(breaks = seq(min(pO2seq), max(pO2seq), by = 10), expand = c(0, 0)) +
+  base_theme + 
+  theme(aspect.ratio=1,
+        legend.position = "bottom",
+        legend.box = "horizontal")
+
+p_flvl_Fbudgets
+
+
 ## ---Oxygen supply---
 O2supply_pos <- dplyr::filter(surf_Fbudgets,  is.finite(O2_supply) & O2_supply >= 0) %>%
   dplyr::mutate(O2supply_pos = O2_supply)
@@ -548,7 +540,7 @@ p_o2_Fbudgets
 surf_Fbudgets$O2_ratio <- surf_Fbudgets$O2_demand / surf_Fbudgets$O2_supply
 
 O2_na  <- dplyr::filter(surf_Fbudgets, !is.finite(O2_ratio) | is.na(O2_ratio))
-O2_neg <- dplyr::filter(surf_Fbudgets,  is.finite(O2_ratio) & O2_ratio > 1)
+O2_neg <- dplyr::filter(surf_Fbudgets,  is.finite(O2_ratio) & O2_ratio > 1.1)
 O2_pos <- dplyr::filter(surf_Fbudgets,  is.finite(O2_ratio) & O2_ratio >= 0 & O2_ratio <=1) %>%
   dplyr::mutate(O2_pos = O2_ratio)
 
@@ -570,7 +562,7 @@ p_o2ratio_Fbudgets <- ggplot() +
   geom_contour(
     inherit.aes = FALSE,
     data = O2_pos, aes(x = f_ref, y = pO2, z = O2_pos),
-    breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0), colour = "black", linewidth = 0.3, alpha = 1, linetype="dashed") +
+    breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.99), colour = "black", linewidth = 0.3, alpha = 1, linetype="dashed") +
   labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~"(kPa)")#,
        #title = paste("Oxygen Surplus")
        ) +
@@ -587,6 +579,172 @@ p_o2ratio_Fbudgets
 #        width = 7, height = 5, units = "in", dpi = 500)
 
 
+## ---Ingestion O2---
+O2_na  <- dplyr::filter(surf_Fbudgets, !is.finite(I_O2) | is.na(I_O2))
+O2_neg <- dplyr::filter(surf_Fbudgets,  is.finite(I_O2) & I_O2 < 0)
+O2_pos <- dplyr::filter(surf_Fbudgets,  is.finite(I_O2) & I_O2 >= 0) %>%
+  dplyr::mutate(O2_pos = I_O2)
+
+O_breaks <- seq(0, 1, by = 0.2) ##
+O_labels <- sprintf("%.1f", O_breaks)
+
+p_Io2_Fbudgets <- ggplot() + 
+  geom_raster(data = O2_na,  aes(f_ref, pO2), fill = "black", interpolate = TRUE) + # NA regions: black, here 
+  geom_raster(data = O2_neg, aes(f_ref, pO2), fill = "black", interpolate = TRUE) + # NEGATIVE region: black
+  geom_raster(data = O2_pos, aes(f_ref, pO2, fill = pmin(O2_pos, max(O2_pos))), interpolate = TRUE) + # POSITIVE region: white -> blue gradient (capped to per-column vmax)
+  scale_fill_gradient(
+    low = "white", high = "#8a5796", na.value = "black",
+    limits = c(0, max(surf_Fbudgets$I, na.rm=T)), breaks = O_breaks, labels = O_labels,                     # <- extremes tied to max positive
+    oob = scales::squish,                                                        # <- clamp out-of-bounds values
+    #name   = expression("Oxygen surplus,"~S - D ~ "(normalized by " * S[max] * ")"),
+    name   = expression("I O2"),
+    guide = legend_bar_guide(O_breaks, O_labels)
+  ) +
+  geom_contour(
+    inherit.aes = FALSE,
+    data = O2_pos, aes(x = f_ref, y = pO2, z = O2_pos),
+    breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0), colour = "black", linewidth = 0.3, alpha = 1, linetype="dashed") +
+  labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~"(kPa)")#,
+       #title = paste("Oxygen Surplus")
+       ) +
+  scale_x_continuous(breaks = seq(min(f_seq), max(f_seq), by = 0.2), expand = c(0, 0)) +
+  scale_y_continuous(breaks = seq(min(pO2seq), max(pO2seq), by = 10), expand = c(0, 0)) +
+  base_theme + 
+  theme(aspect.ratio=1,
+        legend.position = "bottom",
+        legend.box = "horizontal")
+
+p_Io2_Fbudgets
+# Example A: 6×4 inches, 300 dpi PNG
+# ggsave("F_o2_budgets.png", plot = p_o2ratio_Fbudgets,
+#        width = 7, height = 5, units = "in", dpi = 500)
+
+
+## ---Ingestion pot---
+O2_na  <- dplyr::filter(surf_Fbudgets, !is.finite(I_pot) | is.na(I_pot))
+O2_neg <- dplyr::filter(surf_Fbudgets,  is.finite(I_pot) & I_pot < 0)
+O2_pos <- dplyr::filter(surf_Fbudgets,  is.finite(I_pot) & I_pot >= 0) %>%
+  dplyr::mutate(O2_pos = I_pot)
+
+O_breaks <- seq(0, 1, by = 0.2) ##
+O_labels <- sprintf("%.1f", O_breaks)
+
+p_Ipot_Fbudgets <- ggplot() + 
+  geom_raster(data = O2_na,  aes(f_ref, pO2), fill = "black", interpolate = TRUE) + # NA regions: black, here 
+  geom_raster(data = O2_neg, aes(f_ref, pO2), fill = "black", interpolate = TRUE) + # NEGATIVE region: black
+  geom_raster(data = O2_pos, aes(f_ref, pO2, fill = pmin(O2_pos, max(O2_pos))), interpolate = TRUE) + # POSITIVE region: white -> blue gradient (capped to per-column vmax)
+  scale_fill_gradient(
+    low = "white", high = "#8a5796", na.value = "black",
+    limits = c(0, max(surf_Fbudgets$I, na.rm=T)), breaks = O_breaks, labels = O_labels,                     # <- extremes tied to max positive
+    oob = scales::squish,                                                        # <- clamp out-of-bounds values
+    #name   = expression("Oxygen surplus,"~S - D ~ "(normalized by " * S[max] * ")"),
+    name   = expression("I pot"),
+    guide = legend_bar_guide(O_breaks, O_labels)
+  ) +
+  geom_contour(
+    inherit.aes = FALSE,
+    data = O2_pos, aes(x = f_ref, y = pO2, z = O2_pos),
+    breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0), colour = "black", linewidth = 0.3, alpha = 1, linetype="dashed") +
+  labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~"(kPa)")#,
+       #title = paste("Oxygen Surplus")
+       ) +
+  scale_x_continuous(breaks = seq(min(f_seq), max(f_seq), by = 0.2), expand = c(0, 0)) +
+  scale_y_continuous(breaks = seq(min(pO2seq), max(pO2seq), by = 10), expand = c(0, 0)) +
+  base_theme + 
+  theme(aspect.ratio=1,
+        legend.position = "bottom",
+        legend.box = "horizontal")
+
+p_Ipot_Fbudgets
+# Example A: 6×4 inches, 300 dpi PNG
+# ggsave("F_o2_budgets.png", plot = p_o2ratio_Fbudgets,
+#        width = 7, height = 5, units = "in", dpi = 500)
+
+
+## ---Ingestion difference---
+surf_Fbudgets$I_diff <- surf_Fbudgets$I_O2 - surf_Fbudgets$I_pot
+
+O2_na  <- dplyr::filter(surf_Fbudgets, !is.finite(I_diff) | is.na(I_diff))
+O2_neg <- dplyr::filter(surf_Fbudgets,  is.finite(I_diff) & I_diff < 0)
+O2_pos <- dplyr::filter(surf_Fbudgets,  is.finite(I_diff) & I_diff >= 0) %>%
+  dplyr::mutate(O2_pos = I_diff)
+
+O_breaks <- seq(0, max(O2_pos$I_diff), length.out = 6) #c(0, 0.2, 0.4, 0.6, 0.8, 1.0)   # adjust to your U scaling
+O_labels <- sprintf("%.1f", O_breaks)
+
+p_Io2_Fbudgets <- ggplot() + 
+  geom_raster(data = O2_na,  aes(f_ref, pO2), fill = "black", interpolate = TRUE) + # NA regions: black, here 
+  geom_raster(data = O2_neg, aes(f_ref, pO2), fill = "black", interpolate = TRUE) + # NEGATIVE region: black
+  geom_raster(data = O2_pos, aes(f_ref, pO2, fill = pmin(O2_pos, max(O2_pos))), interpolate = TRUE) + # POSITIVE region: white -> blue gradient (capped to per-column vmax)
+  scale_fill_gradient(
+    low = "white", high = "#8a5796", na.value = "black",
+    limits = c(0, max(surf_Fbudgets$I, na.rm=T)), breaks = O_breaks, labels = O_labels,                     # <- extremes tied to max positive
+    oob = scales::squish,                                                        # <- clamp out-of-bounds values
+    #name   = expression("Oxygen surplus,"~S - D ~ "(normalized by " * S[max] * ")"),
+    name   = expression("I difference"),
+    guide = legend_bar_guide(O_breaks, O_labels)
+  ) +
+  geom_contour(
+    inherit.aes = FALSE,
+    data = O2_pos, aes(x = f_ref, y = pO2, z = O2_pos),
+    breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0), colour = "black", linewidth = 0.3, alpha = 1, linetype="dashed") +
+  labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~"(kPa)")#,
+       #title = paste("Oxygen Surplus")
+       ) +
+  scale_x_continuous(breaks = seq(min(f_seq), max(f_seq), by = 0.2), expand = c(0, 0)) +
+  scale_y_continuous(breaks = seq(min(pO2seq), max(pO2seq), by = 10), expand = c(0, 0)) +
+  base_theme + 
+  theme(aspect.ratio=1,
+        legend.position = "bottom",
+        legend.box = "horizontal")
+
+p_Io2_Fbudgets
+# Example A: 6×4 inches, 300 dpi PNG
+# ggsave("F_o2_budgets.png", plot = p_o2ratio_Fbudgets,
+#        width = 7, height = 5, units = "in", dpi = 500)
+
+
+## ---Ingestion---
+O2_na  <- dplyr::filter(surf_Fbudgets, !is.finite(I) | is.na(I))
+O2_neg <- dplyr::filter(surf_Fbudgets,  is.finite(I) & I < 0)
+O2_pos <- dplyr::filter(surf_Fbudgets,  is.finite(I) & I >= 0) %>%
+  dplyr::mutate(O2_pos = I)
+
+O_breaks <- seq(0, max(O2_pos$I), length.out = 6) #c(0, 0.2, 0.4, 0.6, 0.8, 1.0)   # adjust to your U scaling
+O_labels <- sprintf("%.1f", O_breaks)
+
+p_I_Fbudgets <- ggplot() + 
+  geom_raster(data = O2_na,  aes(f_ref, pO2), fill = "black", interpolate = TRUE) + # NA regions: black, here 
+  geom_raster(data = O2_neg, aes(f_ref, pO2), fill = "black", interpolate = TRUE) + # NEGATIVE region: black
+  geom_raster(data = O2_pos, aes(f_ref, pO2, fill = pmin(O2_pos, max(O2_pos))), interpolate = TRUE) + # POSITIVE region: white -> blue gradient (capped to per-column vmax)
+  scale_fill_gradient(
+    low = "white", high = "#8a5796", na.value = "black",
+    limits = c(0, max(surf_Fbudgets$I, na.rm=T)), breaks = O_breaks, labels = O_labels,                     # <- extremes tied to max positive
+    oob = scales::squish,                                                        # <- clamp out-of-bounds values
+    #name   = expression("Oxygen surplus,"~S - D ~ "(normalized by " * S[max] * ")"),
+    name   = expression("I"),
+    guide = legend_bar_guide(O_breaks, O_labels)
+  ) +
+  geom_contour(
+    inherit.aes = FALSE,
+    data = O2_pos, aes(x = f_ref, y = pO2, z = O2_pos),
+    breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0), colour = "black", linewidth = 0.3, alpha = 1, linetype="dashed") +
+  labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~"(kPa)")#,
+       #title = paste("Oxygen Surplus")
+       ) +
+  scale_x_continuous(breaks = seq(min(f_seq), max(f_seq), by = 0.2), expand = c(0, 0)) +
+  scale_y_continuous(breaks = seq(min(pO2seq), max(pO2seq), by = 10), expand = c(0, 0)) +
+  base_theme + 
+  theme(aspect.ratio=1,
+        legend.position = "bottom",
+        legend.box = "horizontal")
+
+p_I_Fbudgets
+# Example A: 6×4 inches, 300 dpi PNG
+# ggsave("F_o2_budgets.png", plot = p_o2ratio_Fbudgets,
+#        width = 7, height = 5, units = "in", dpi = 500)
+
+
 ## ---Cruising speed---
 Uopt_na  <- dplyr::filter(surf_Fbudgets, !is.finite(U_opt) | is.na(U_opt))
 Uopt_pos <- dplyr::filter(surf_Fbudgets,  is.finite(U_opt) & U_opt >= 0) %>%
@@ -597,7 +755,7 @@ U_labels <- sprintf("%.1f", U_breaks)
 
 p_U_Fbudgets <- ggplot() + 
   geom_raster(data = Uopt_na,  aes(f_ref, pO2), fill = "#440154FF", interpolate = TRUE) + # NA regions: black, here 
-  geom_raster(data = Uopt_pos, aes(f_ref, pO2, fill = pmin(Uopt_pos, 1)), interpolate = TRUE) + # POSITIVE region: white -> blue gradient (capped to per-column vmax)
+  geom_raster(data = Uopt_pos, aes(f_ref, pO2, fill = pmin(Uopt_pos, max(Uopt_pos))), interpolate = TRUE) + # POSITIVE region: white -> blue gradient (capped to per-column vmax)
   scale_fill_viridis_c(
     na.value = "#440154FF",
     #limits = c(0, 1),                                                           # <- extremes tied to max positive
@@ -627,12 +785,6 @@ p_U_Fbudgets
 
 
 ## Limitation regimes
-surf_Fbudgets <- add_regime_labels2( # Append regime to the surface
-  surf_Fbudgets,
-  use_derivs = TRUE,
-  dE_thr = 0.01
-)
-
 # ---------------------------
 # 2) Plot like your U plot: tiles + borders, bottom legend
 
@@ -640,26 +792,26 @@ surf_Fbudgets <- add_regime_labels2( # Append regime to the surface
 reg_levels <- c(
   "Oxygen exclusion",
   "Energetic exclusion",
-  "Oxygen limited (strict)",
-  "Oxygen limited (prey sensitive)",
-  "Prey limited (O2-tightening)",
-  "Prey limited (O2-relaxing)"
+  "No feeding",
+  "Oxygen-limited feeding",
+  "Saturated (Cmax-limited)",
+  "Encounter-limited feeding"
 )
 
 regime_cols <- c(
   "Oxygen exclusion"           = "black",
   "Energetic exclusion"        = "gray60",
-  "Oxygen limited (strict)"             = "#8a5796", #"#674776",
-  "Oxygen limited (prey sensitive)"     = "#BEA0C4",
-  "Prey limited (O2-tightening)"               = "#ADD946", #"#FDE725FF", #"#C0DD3F",
-  "Prey limited (O2-relaxing)"             = "#4DB674"
+  "Oxygen-limited feeding"             = "#8a5796", #"#674776",
+  "No feeding"     = "#BEA0C4",
+  "Saturated (Cmax-limited)"               = "#ADD946", #"#FDE725FF", #"#C0DD3F",
+  "Encounter-limited feeding"             = "#4DB674"
 )
 
 # Build a regular grid matrix of class IDs for clean borders
 xs <- sort(unique(surf_Fbudgets$f_ref))
 ys <- sort(unique(surf_Fbudgets$pO2))
-Z_tbl <- tidyr::pivot_wider(surf_Fbudgets[, c("f_ref","pO2","class_id")],
-                            names_from = pO2, values_from = class_id) |>
+Z_tbl <- tidyr::pivot_wider(surf_Fbudgets[, c("f_ref","pO2","regime")],
+                            names_from = pO2, values_from = regime) |>
          dplyr::arrange(f_ref)
 Z <- as.matrix(Z_tbl[, -1, drop = FALSE])
 
@@ -751,10 +903,1103 @@ p_Fbudget <-
 p_Fbudget
 ```
 
-```{r eval=T, include=FALSE}
+
+```{r eval=F, include=FALSE}
 # Example A: 6×4 inches, 300 dpi PNG
 ggsave("F_budgets.png", plot = p_Fbudget,
        width = 6.5, height = 3.25, units = "in", dpi = 500)
+```
+
+
+```{r}
+B_seq <- 10^seq(-2, 4, length.out = 400)  # 1e-2 to 1e3, evenly spaced in log10
+pO2seq <- seq(0, 30, by=0.05)                                                   # [kPa]
+
+mass <- 1e4
+
+surf_Fbudgets <- compute_state_surface(
+  tr,
+  masses   = mass,
+  Tseq     = 5,
+  pO2seq   = pO2seq,
+  prey_units = "biomass",
+  preys      = B_seq,
+  pair_mode  = "cross",
+  D = 3,
+  u_prey = 0 #10^(-0.55) * (0.01 * mass)^(1/6)
+)
+
+surf_Fbudgets <- add_regime_labels_ingestion(surf_Fbudgets)
+```
+
+
+```{r warning=FALSE}
+surf_plot <- surf_Fbudgets %>%
+  dplyr::mutate(
+    B = B_used,                             # absolute biomass
+    regime = factor(as.character(regime), levels = levels(regime)),
+    class_id = as.integer(regime)
+  )
+
+# X-axis breaks/labels for absolute biomass with log10 spacing
+B_limits <- range(B_seq, finite = TRUE)
+
+B_breaks <- 10^seq(floor(log10(B_limits[1])), ceiling(log10(B_limits[2])), by = 1)
+
+# ---------------------------------------------------------------------
+# Available energy plot (absolute B on x, log10 axis)
+#    - O2_margin < 0 -> black
+#    - E_net_norm < 0 -> gray60
+#    - NA transparent
+# ---------------------------------------------------------------------
+
+E_O2excl <- dplyr::filter(surf_plot, is.finite(O2_margin) & O2_margin < 0)
+
+E_neg <- dplyr::filter(
+  surf_plot,
+  is.finite(E_net_norm) & E_net_norm < 0 &
+    !(is.finite(O2_margin) & O2_margin < 0)
+)
+
+E_pos <- dplyr::filter(
+  surf_plot,
+  is.finite(E_net_norm) & E_net_norm >= 0 &
+    !(is.finite(O2_margin) & O2_margin < 0)
+) %>%
+  dplyr::mutate(E_pos = pmin(E_net_norm, 1))
+
+E_breaks <- seq(0, 1, by = 0.2)
+E_labels <- sprintf("%.1f", E_breaks)
+
+p_Eavail_Fbudgets <- ggplot() +
+  # oxygen exclusion: black
+  # oxygen-balance boundary: O2_margin == 0
+  # positive energy: gradient
+  geom_raster(
+    data = E_pos,
+    aes(x = B, y = pO2, fill = E_pos),
+    interpolate = TRUE
+  ) +
+  geom_raster(
+    data = E_O2excl,
+    aes(x = B, y = pO2),
+    fill = "black",
+    interpolate = TRUE
+  ) +
+  geom_contour(
+    inherit.aes = FALSE,
+    data = dplyr::filter(surf_plot, is.finite(O2_margin)),
+    aes(x = B, y = pO2, z = O2_margin),
+    breaks = 0.01,
+    colour = "black", linewidth = 0.4
+  ) +
+  # negative energy: gray
+  geom_raster(
+    data = E_neg,
+    aes(x = B, y = pO2),
+    fill = "gray60",
+    interpolate = TRUE
+  ) +
+  # contours of energy levels (optional)
+  geom_contour(
+    inherit.aes = FALSE,
+    data = E_pos,
+    aes(x = B, y = pO2, z = f),
+    breaks = seq(0, 1, by = 0.1),
+    colour = "black", linewidth = 0.3, linetype = "dashed"
+  ) +
+  # contours of energy levels (optional)
+  geom_contour(
+    inherit.aes = FALSE,
+    data = E_pos,
+    aes(x = B, y = pO2, z = f),
+    breaks = 0.99,
+    colour = "black", linewidth = 0.4#, linetype = "dashed"
+  ) +
+  scale_fill_gradient(
+    low = "white", high = "#67A5CA",
+    na.value = NA,                     # NA transparent (not gray)
+    limits = c(0, 1),
+    breaks = E_breaks, labels = E_labels,
+    oob = scales::squish,
+    name  = expression("Available energy"),
+    guide = legend_bar_guide(E_breaks, E_labels)
+  ) +
+  labs(
+    x = "Prey biomass B",
+    y = expression("Oxygen,"~p[O[2]]~"(kPa)")
+  ) +
+  scale_x_log10(
+    limits = B_limits,
+    breaks = B_breaks,
+    labels = scales::trans_format("log10", scales::math_format(10^.x)),
+    expand = c(0, 0)
+  ) +
+  scale_y_continuous(
+    breaks = seq(min(pO2seq), max(pO2seq), by = 10),
+    expand = c(0, 0)
+  ) +
+  base_theme +
+  theme(aspect.ratio = 1,
+        legend.position = "bottom",
+        legend.box = "horizontal")
+
+p_Eavail_Fbudgets
+
+
+# ---------------------------------------------------------------------
+# Cruising speed plot (absolute B on x, log10 axis)
+#    - O2_margin < 0 -> black
+#    - U_opt NA -> transparent
+#    - U_opt finite -> viridis fill
+# ---------------------------------------------------------------------
+
+# Expect: surf_plot has columns: B, pO2, U_opt, O2_margin
+# and you already have B_limits, B_breaks, pO2seq, base_theme, legend_bar_guide
+
+# Oxygen exclusion mask (same as energy plot)
+U_O2excl <- dplyr::filter(surf_plot, is.finite(O2_margin) & O2_margin < 0)
+
+# Finite U (exclude oxygen exclusion so black wins)
+U_pos <- dplyr::filter(
+  surf_plot,
+  is.finite(U_opt) &
+    !(is.finite(O2_margin) & O2_margin < 0)
+) %>%
+  dplyr::mutate(U_pos = U_opt)
+
+# Choose breaks from the finite U range (or hard-code if you prefer)
+U_max <- max(U_pos$U_pos, na.rm = TRUE)
+U_breaks <- pretty(c(0, U_max), n = 6)
+U_breaks <- U_breaks[U_breaks >= 0 & U_breaks <= U_max]
+U_labels <- sprintf("%.2g", U_breaks)
+
+p_U_Fbudgets_B <- ggplot() +
+  # oxygen exclusion: black
+  geom_raster(
+    data = U_O2excl,
+    aes(x = B, y = pO2),
+    fill = "black",
+    interpolate = TRUE
+  ) +
+  # finite U: viridis
+  geom_raster(
+    data = U_pos,
+    aes(x = B, y = pO2, fill = U_pos),
+    interpolate = TRUE
+  ) +
+  # contours of energy levels (optional)
+  geom_contour(
+    inherit.aes = FALSE,
+    data = E_pos,
+    aes(x = B, y = pO2, z = f),
+    breaks = seq(0, 1, by = 0.1),
+    colour = "white", linewidth = 0.3, linetype = "dashed"
+  ) +
+  # contours of energy levels (optional)
+  geom_contour(
+    inherit.aes = FALSE,
+    data = E_pos,
+    aes(x = B, y = pO2, z = f),
+    breaks = 0.99,
+    colour = "white", linewidth = 0.4#, linetype = "dashed"
+  ) +
+  # U contours (optional)
+  # geom_contour(
+  #   inherit.aes = FALSE,
+  #   data = U_pos,
+  #   aes(x = B, y = pO2, z = U_pos),
+  #   breaks = U_breaks,
+  #   colour = "white", linewidth = 0.3, alpha = 0.5, linetype = "dashed"
+  # ) +
+  # oxygen-balance boundary: O2_margin == 0 (optional but usually helpful)
+  geom_contour(
+    inherit.aes = FALSE,
+    data = dplyr::filter(surf_plot, is.finite(O2_margin)),
+    aes(x = B, y = pO2, z = O2_margin),
+    breaks = 0.01,
+    colour = "white", linewidth = 0.4
+  ) +
+  # negative energy: gray
+  geom_raster(
+    data = E_neg,
+    aes(x = B, y = pO2),
+    fill = "gray60",
+    interpolate = TRUE
+  ) +
+  scale_fill_viridis_c(
+    na.value = NA,                 # NA transparent (matches your energy plot intent)
+    breaks = U_breaks, labels = U_labels,
+    oob = scales::squish,
+    name  = expression("Cruising speed"),
+    guide = legend_bar_guide(U_breaks, U_labels)
+  ) +
+  labs(
+    x = "Prey biomass B",
+    y = expression("Oxygen,"~p[O[2]]~"(kPa)")
+  ) +
+  scale_x_log10(
+    limits = B_limits,
+    breaks = B_breaks,
+    labels = scales::trans_format("log10", scales::math_format(10^.x)),
+    expand = c(0, 0)
+  ) +
+  scale_y_continuous(
+    breaks = seq(min(pO2seq), max(pO2seq), by = 10),
+    expand = c(0, 0)
+  ) +
+  base_theme +
+  theme(
+    aspect.ratio = 1,
+    legend.position = "bottom",
+    legend.box = "horizontal"
+  )
+
+p_U_Fbudgets_B
+```
+
+
+```{r}
+surf_plot <- surf_Fbudgets %>%
+  dplyr::mutate(
+    B = B_used,                             # absolute biomass
+    regime = factor(as.character(regime), levels = levels(regime)),
+    class_id = as.integer(regime)
+  )
+
+# X-axis breaks/labels for absolute biomass with log10 spacing
+B_limits <- range(B_seq, finite = TRUE)
+
+B_breaks <- 10^seq(floor(log10(B_limits[1])), ceiling(log10(B_limits[2])), by = 1)
+
+# ---------------------------------------------------------------------
+# Available energy plot (absolute B on x, log10 axis)
+#    - O2_margin < 0 -> black
+#    - E_net_norm < 0 -> gray60
+#    - NA transparent
+# ---------------------------------------------------------------------
+
+E_O2excl <- dplyr::filter(surf_plot, is.finite(O2_margin) & O2_margin < 0)
+
+E_neg <- dplyr::filter(
+  surf_plot,
+  is.finite(E_net_norm) & E_net_norm < 0 &
+    !(is.finite(O2_margin) & O2_margin < 0)
+)
+
+E_pos <- dplyr::filter(
+  surf_plot,
+  is.finite(E_net_norm) & E_net_norm >= 0 &
+    !(is.finite(O2_margin) & O2_margin < 0)
+) %>%
+  dplyr::mutate(E_pos = pmin(E_net_norm, 1))
+
+E_breaks <- seq(0, 1, by = 0.2)
+E_labels <- sprintf("%.1f", E_breaks)
+
+p_Eavail_Fbudgets <- ggplot() +
+  # oxygen exclusion: black
+  geom_raster(
+    data = E_O2excl,
+    aes(x = B, y = pO2),
+    fill = "black",
+    interpolate = TRUE
+  ) +
+  # negative energy: gray
+  geom_raster(
+    data = E_neg,
+    aes(x = B, y = pO2),
+    fill = "gray60",
+    interpolate = TRUE
+  ) +
+  # positive energy: gradient
+  geom_raster(
+    data = E_pos,
+    aes(x = B, y = pO2, fill = E_pos),
+    interpolate = TRUE
+  ) +
+  # contours of energy levels (optional)
+  geom_contour(
+    inherit.aes = FALSE,
+    data = E_pos,
+    aes(x = B, y = pO2, z = E_pos),
+    breaks = seq(0, 1, by = 0.1),
+    colour = "black", linewidth = 0.3, linetype = "dashed"
+  ) +
+  # oxygen-balance boundary: O2_margin == 0
+  geom_contour(
+    inherit.aes = FALSE,
+    data = dplyr::filter(surf_plot, is.finite(O2_margin)),
+    aes(x = B, y = pO2, z = O2_margin),
+    breaks = 0,
+    colour = "black", linewidth = 0.4
+  ) +
+  scale_fill_gradient(
+    low = "white", high = "#67A5CA",
+    na.value = NA,                     # NA transparent (not gray)
+    limits = c(0, 1),
+    breaks = E_breaks, labels = E_labels,
+    oob = scales::squish,
+    name  = expression("Available energy"),
+    guide = legend_bar_guide(E_breaks, E_labels)
+  ) +
+  labs(
+    x = "Prey biomass B",
+    y = expression("Oxygen,"~p[O[2]]~"(kPa)")
+  ) +
+  scale_x_log10(
+    limits = B_limits,
+    breaks = B_breaks,
+    labels = scales::math_format(10^.x),
+    expand = c(0, 0)
+  ) +
+  scale_y_continuous(
+    breaks = seq(min(pO2seq), max(pO2seq), by = 10),
+    expand = c(0, 0)
+  ) +
+  base_theme +
+  theme(aspect.ratio = 1,
+        legend.position = "bottom",
+        legend.box = "horizontal")
+
+p_Eavail_Fbudgets
+
+
+# ---------------------------------------------------------------------
+# Cruising speed plot (absolute B on x, log10 axis)
+#    - O2_margin < 0 -> black
+#    - U_opt NA -> transparent
+#    - U_opt finite -> viridis fill
+# ---------------------------------------------------------------------
+
+# Expect: surf_plot has columns: B, pO2, U_opt, O2_margin
+# and you already have B_limits, B_breaks, pO2seq, base_theme, legend_bar_guide
+
+# Oxygen exclusion mask (same as energy plot)
+U_O2excl <- dplyr::filter(surf_plot, is.finite(O2_margin) & O2_margin < 0)
+
+# Finite U (exclude oxygen exclusion so black wins)
+U_pos <- dplyr::filter(
+  surf_plot,
+  is.finite(U_opt) &
+    !(is.finite(O2_margin) & O2_margin < 0)
+) %>%
+  dplyr::mutate(U_pos = U_opt)
+
+# Choose breaks from the finite U range (or hard-code if you prefer)
+U_max <- max(U_pos$U_pos, na.rm = TRUE)
+U_breaks <- pretty(c(0, U_max), n = 6)
+U_breaks <- U_breaks[U_breaks >= 0 & U_breaks <= U_max]
+U_labels <- sprintf("%.2g", U_breaks)
+
+p_U_Fbudgets_B <- ggplot() +
+  # oxygen exclusion: black
+  geom_raster(
+    data = U_O2excl,
+    aes(x = B, y = pO2),
+    fill = "black",
+    interpolate = TRUE
+  ) +
+  # finite U: viridis
+  geom_raster(
+    data = U_pos,
+    aes(x = B, y = pO2, fill = U_pos),
+    interpolate = TRUE
+  ) +
+  # U contours (optional)
+  geom_contour(
+    inherit.aes = FALSE,
+    data = U_pos,
+    aes(x = B, y = pO2, z = U_pos),
+    breaks = U_breaks,
+    colour = "white", linewidth = 0.3, alpha = 0.5, linetype = "dashed"
+  ) +
+  # oxygen-balance boundary: O2_margin == 0 (optional but usually helpful)
+  geom_contour(
+    inherit.aes = FALSE,
+    data = dplyr::filter(surf_plot, is.finite(O2_margin)),
+    aes(x = B, y = pO2, z = O2_margin),
+    breaks = 0,
+    colour = "black", linewidth = 0.4
+  ) +
+  scale_fill_viridis_c(
+    na.value = NA,                 # NA transparent (matches your energy plot intent)
+    breaks = U_breaks, labels = U_labels,
+    oob = scales::squish,
+    name  = expression("Cruising speed"),
+    guide = legend_bar_guide(U_breaks, U_labels)
+  ) +
+  labs(
+    x = "Prey biomass B",
+    y = expression("Oxygen,"~p[O[2]]~"(kPa)")
+  ) +
+  scale_x_log10(
+    limits = B_limits,
+    breaks = B_breaks,
+    labels = scales::math_format(10^.x),
+    expand = c(0, 0)
+  ) +
+  scale_y_continuous(
+    breaks = seq(min(pO2seq), max(pO2seq), by = 10),
+    expand = c(0, 0)
+  ) +
+  base_theme +
+  theme(
+    aspect.ratio = 1,
+    legend.position = "bottom",
+    legend.box = "horizontal"
+  )
+
+p_U_Fbudgets_B
+```
+
+
+# Fig. Allometry
+
+```{r}
+B_fixed <- 1000
+
+# Grids
+masses <- 10^seq(-3, 4, by = 0.25)   # 1e-3 to 1e4 g
+Tseq   <- seq(0, 20, by = 1)         # 0 to 20 C
+pO2seq <- seq(0, 30, by = 0.05)      # kPa
+
+surf_B1000 <- compute_state_surface(
+  tr,
+  masses     = masses,
+  Tseq       = Tseq,
+  pO2seq     = pO2seq,
+  prey_units = "biomass",
+  preys      = B_fixed,
+  pair_mode  = "cross",
+  D          = 2,
+  u_prey     = 0
+)
+
+# Optional if you still want the regime labels column for plotting later:
+surf_B1000 <- add_regime_labels_ingestion(surf_B1000)
+```
+
+
+```{r}
+pO2_star_from_profile_margin <- function(df_profile,
+                                         eps_excl = 1e-6) {
+
+  dd <- df_profile %>%
+    arrange(pO2) %>%
+    mutate(
+      oxy_excl = !is.finite(U_opt) | !is.finite(O2_margin) | (O2_margin < -eps_excl)
+    ) %>%
+    filter(!oxy_excl, is.finite(pO2), is.finite(O2_margin))
+
+  if (nrow(dd) < 2) return(NA_real_)
+
+  g <- dd$O2_margin
+
+  # If already slack at the lowest pO2, threshold is below your range
+  if (g[1] > 0) return(dd$pO2[1])
+
+  # If never slack in range, threshold is above your max pO2
+  if (all(g <= 0)) return(NA_real_)
+
+  # first index where margin becomes positive
+  j <- which(g > 0)[1]
+  i <- j - 1
+
+  p1 <- dd$pO2[i]; p2 <- dd$pO2[j]
+  g1 <- g[i];      g2 <- g[j]
+
+  p1 + (0 - g1) * (p2 - p1) / (g2 - g1)
+}
+
+
+# Apply across mass × T
+pO2_star_tbl <- surf_B1000 %>%
+  group_by(mass, T) %>%
+  group_modify(~ tibble(pO2_star = pO2_star_from_profile_margin(.x))) %>%
+  ungroup()
+
+pO2_star_tbl
+```
+
+```{r}
+fit_df <- pO2_star_tbl %>%
+  filter(is.finite(pO2_star), pO2_star > 0)
+
+mod <- lm(log(pO2_star) ~ log(mass) + T, data = fit_df)
+summary(mod)
+
+b_mass <- coef(mod)[["log(mass)"]]
+c_T    <- coef(mod)[["T"]]
+Q10_pO2star <- exp(10 * c_T)
+
+list(allometric_exponent = b_mass,
+     temp_coeff_per_C    = c_T,
+     Q10_effective       = Q10_pO2star)
+
+```
+
+```{r}
+ggplot(fit_df, aes(x = log10(mass), y = T, fill = pO2_star)) +
+  geom_raster() +
+  scale_fill_viridis_c() +
+  labs(x = expression(log[10]("mass (g)")),
+       y = "Temperature (°C)",
+       fill = expression(p[O[2]]^"* (kPa)")) +
+  theme_minimal()
+```
+
+
+```{r}
+# ---- 1) fit model (skip if you already have mod) --------------------
+fit_df <- pO2_star_tbl %>%
+  filter(is.finite(pO2_star), pO2_star > 0)
+
+mod <- lm(log(pO2_star) ~ log(mass) + T, data = fit_df)
+summary(mod)
+
+# ---- 2) prediction grid --------------------------------------------
+T_grid <- seq(min(fit_df$T), max(fit_df$T), length.out = 200)
+
+mass_lines <- c(1e-3, 1e-2, 1e-1, 1, 10, 1e2, 1e3, 1e4)  # choose your masses
+
+pred_df <- tidyr::expand_grid(
+  T = T_grid,
+  mass = mass_lines
+) %>%
+  mutate(
+    log_pO2_hat = predict(mod, newdata = .),
+    pO2_hat = exp(log_pO2_hat),
+    mass_f = factor(mass, levels = mass_lines,
+                    labels = paste0("m = ", format(mass_lines, scientific = TRUE), " g"))
+  )
+
+# ---- 3) plot: pO2 vs T with lines for masses ------------------------
+p <- ggplot() +
+  # optional: empirical points (subsample if huge)
+  geom_point(
+    data = fit_df %>% filter(mass %in% mass_lines),
+    aes(x = T, y = pO2_star, color = factor(mass)),
+    alpha = 0.35, size = 1
+  ) +
+  geom_line(
+    data = pred_df,
+    aes(x = T, y = pO2_hat, color = mass_f),
+    linewidth = 0.9
+  ) +
+  labs(
+    x = "Temperature (°C)",
+    y = expression(p[O[2]]^"*~"(kPa)),
+    color = "Mass"
+  ) +
+  scale_y_continuous(limits = c(0, 30), expand = c(0, 0)) +
+  theme_minimal()
+
+p
+```
+
+# Other emergent variables
+
+```{r}
+# ---------------------------------------------------------------------
+# Helpers: crossing finders along B (in log10-space)
+# ---------------------------------------------------------------------
+
+# Generic "find B where y crosses a threshold", scanning B increasing.
+# Returns interpolated B (not logB) at the first crossing from one side to the other.
+B_crossing_from_profile <- function(df_profile,
+                                    ycol,
+                                    thresh = 0,
+                                    direction = c("neg_to_pos","pos_to_neg"),
+                                    require_finite = TRUE) {
+
+  direction <- match.arg(direction)
+
+  dd <- df_profile %>%
+    filter(is.finite(B_used)) %>%
+    arrange(B_used) %>%
+    mutate(logB = log10(B_used))
+
+  if (require_finite) {
+    dd <- dd %>% filter(is.finite(.data[[ycol]]), is.finite(logB))
+  }
+  if (nrow(dd) < 2) return(NA_real_)
+
+  y <- dd[[ycol]] - thresh
+
+  # determine sign regions
+  neg <- y < 0
+  pos <- y > 0
+  zer <- y == 0
+
+  # Treat exact zeros as a valid crossing at that B (take smallest B with y==0)
+  if (any(zer)) {
+    return(dd$B_used[min(which(zer))])
+  }
+
+  if (direction == "neg_to_pos") {
+    # want first index where y becomes positive after being negative
+    if (!any(neg) || !any(pos)) return(NA_real_)
+    i_last_neg <- max(which(neg))
+    j_first_pos <- which(pos & (seq_along(pos) > i_last_neg))[1]
+    if (is.na(j_first_pos)) return(NA_real_)
+  } else {
+    # pos_to_neg
+    if (!any(neg) || !any(pos)) return(NA_real_)
+    i_last_pos <- max(which(pos))
+    j_first_neg <- which(neg & (seq_along(neg) > i_last_pos))[1]
+    if (is.na(j_first_neg)) return(NA_real_)
+    i_last_neg <- i_last_pos
+    j_first_pos <- j_first_neg
+  }
+
+  # interpolate in logB between the bracketing points
+  x1 <- dd$logB[i_last_neg]; x2 <- dd$logB[j_first_pos]
+  y1 <- y[i_last_neg];       y2 <- y[j_first_pos]
+
+  if (!is.finite(y1) || !is.finite(y2) || abs(y2 - y1) < 1e-12) {
+    return(10^(0.5 * (x1 + x2)))
+  }
+
+  x_star <- x1 + (0 - y1) * (x2 - x1) / (y2 - y1)
+  10^x_star
+}
+
+# ---------------------------------------------------------------------
+# Targets:
+#   B_E0(pO2): E_net crosses 0 from negative to positive as B increases
+#   B_cross(pO2): O2_margin crosses 0 from positive to negative as B increases
+#                 (oxygen starts binding) -- optionally require E_net>0
+# ---------------------------------------------------------------------
+
+B_E0_from_profile <- function(df_profile) {
+  # If E_net already >0 at smallest B, return that smallest B (already viable)
+  dd <- df_profile %>% filter(is.finite(B_used), is.finite(E_net)) %>% arrange(B_used)
+  if (nrow(dd) < 2) return(NA_real_)
+  if (dd$E_net[1] > 0) return(dd$B_used[1])
+  # Find crossing E_net = 0 (neg -> pos)
+  B_crossing_from_profile(dd, ycol = "E_net", thresh = 0, direction = "neg_to_pos")
+}
+
+B_cross_from_profile <- function(df_profile, require_Epos = TRUE) {
+  dd <- df_profile %>%
+    filter(is.finite(B_used), is.finite(O2_margin)) %>%
+    arrange(B_used)
+
+  if (require_Epos) {
+    dd <- dd %>% filter(is.finite(E_net), E_net > 0)
+  }
+  if (nrow(dd) < 2) return(NA_real_)
+
+  # Oxygen "binds" when margin <= 0; slack when margin > 0.
+  # As B increases, margin typically declines; crossing is pos -> neg.
+  B_crossing_from_profile(dd, ycol = "O2_margin", thresh = 0, direction = "pos_to_neg")
+}
+
+# ---------------------------------------------------------------------
+# Compute surfaces for requested sizes and temperatures
+# ---------------------------------------------------------------------
+
+masses <- c(1e0, 1e4)
+Tvals  <- c(5, 30)
+
+pO2seq <- seq(0, 30, by = 0.1)         # kPa (coarsen/finen as needed)
+
+# B grid (log-spaced)
+# If you get NAs, widen range (lower min and/or higher max).
+B_seq  <- 10^seq(-4, 4, length.out = 500)   # 1e-4 to 1e4
+
+# We'll compute for each (mass, T) separately to keep it clear
+surfaces <- list()
+k <- 1
+for (m in masses) {
+  for (T in Tvals) {
+    surfaces[[k]] <- compute_state_surface(
+      tr,
+      masses     = m,
+      Tseq       = T,
+      pO2seq     = pO2seq,
+      prey_units = "biomass",
+      preys      = B_seq,
+      pair_mode  = "cross",
+      D          = 3,
+      u_prey     = 0
+    )
+    surfaces[[k]]$mass <- m
+    surfaces[[k]]$T    <- T
+    k <- k + 1
+  }
+}
+surf_all <- bind_rows(surfaces)
+
+# ---------------------------------------------------------------------
+# Derive B_E0(pO2) and B_cross(pO2) for each (mass,T) profile across B
+# ---------------------------------------------------------------------
+
+B_thresh_tbl <- surf_all %>%
+  group_by(mass, T, pO2) %>%
+  group_modify(~{
+    tibble(
+      B_E0    = B_E0_from_profile(.x),
+      B_cross = B_cross_from_profile(.x, require_Epos = TRUE)
+    )
+  }) %>%
+  ungroup() %>%
+  mutate(
+    mass_lbl = factor(paste0("m = ", format(mass, scientific = TRUE), " g"),
+                      levels = c("m = 1e+00 g", "m = 1e+04 g")),
+    T_lbl = factor(paste0(T, "°C"), levels = c("5°C","30°C"))
+  )
+
+# ---------------------------------------------------------------------
+# Plot 1: B_E0 vs pO2 (two lines per mass: 5C and 30C)
+# ---------------------------------------------------------------------
+
+p_BE0 <- ggplot(B_thresh_tbl, aes(x = pO2, y = B_E0, color = T_lbl)) +
+  geom_line(linewidth = 0.9, na.rm = TRUE) +
+  facet_wrap(~ mass_lbl, ncol = 2, scales = "fixed") +
+  scale_y_log10(
+    breaks = 10^seq(-4, 4, by = 2),
+    labels = scales::math_format(10^.x)
+  ) +
+  scale_x_continuous(limits = range(pO2seq), breaks = seq(0, 30, by = 5), expand = c(0,0)) +
+  labs(
+    x = expression("Oxygen,"~p[O[2]]~"(kPa)"),
+    y = expression(B[E0]~"(prey biomass threshold for "~E[net] > 0~")"),
+    color = "Temperature"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(panel.grid.minor = element_blank())
+
+p_BE0
+
+
+# ---------------------------------------------------------------------
+# Plot 2: B_cross vs pO2 (oxygen starts binding; require E_net>0)
+# ---------------------------------------------------------------------
+
+p_Bcross <- ggplot(B_thresh_tbl, aes(x = pO2, y = B_cross, color = T_lbl)) +
+  geom_line(linewidth = 0.9, na.rm = TRUE) +
+  facet_wrap(~ mass_lbl, ncol = 2, scales = "fixed") +
+  scale_y_log10(
+    breaks = 10^seq(-4, 4, by = 2),
+    labels = scales::math_format(10^.x)
+  ) +
+  scale_x_continuous(limits = range(pO2seq), breaks = seq(0, 30, by = 5), expand = c(0,0)) +
+  labs(
+    x = expression("Oxygen,"~p[O[2]]~"(kPa)"),
+    y = expression(B[cross]~"(prey threshold where "~S==D~")"),
+    color = "Temperature"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(panel.grid.minor = element_blank())
+
+p_Bcross
+
+```
+
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(scales)
+
+# ---------- robust crossing helpers (same as before) ----------
+B_crossing_from_profile <- function(df_profile, ycol, thresh = 0,
+                                    direction = c("neg_to_pos","pos_to_neg")) {
+  direction <- match.arg(direction)
+  dd <- df_profile %>%
+    filter(is.finite(B_used), B_used > 0, is.finite(.data[[ycol]])) %>%
+    arrange(B_used) %>%
+    mutate(logB = log10(B_used),
+           y = .data[[ycol]] - thresh)
+
+  if (nrow(dd) < 2) return(NA_real_)
+
+  # exact hits
+  if (any(dd$y == 0)) return(dd$B_used[min(which(dd$y == 0))])
+
+  neg <- dd$y < 0
+  pos <- dd$y > 0
+  if (!any(neg) || !any(pos)) return(NA_real_)
+
+  if (direction == "neg_to_pos") {
+    i <- max(which(neg))
+    j <- which(pos & (seq_along(pos) > i))[1]
+  } else {
+    i <- max(which(pos))
+    j <- which(neg & (seq_along(neg) > i))[1]
+  }
+  if (is.na(j)) return(NA_real_)
+
+  x1 <- dd$logB[i]; x2 <- dd$logB[j]
+  y1 <- dd$y[i];    y2 <- dd$y[j]
+  if (abs(y2 - y1) < 1e-12) return(10^(0.5*(x1+x2)))
+
+  xstar <- x1 + (0 - y1) * (x2 - x1) / (y2 - y1)
+  10^xstar
+}
+
+B_E0_from_profile <- function(df_profile) {
+  # E_net crosses 0 from negative to positive as B increases
+  dd <- df_profile %>% filter(is.finite(E_net)) %>% arrange(B_used)
+  if (nrow(dd) < 2) return(NA_real_)
+  # if already positive at min B, return min B
+  if (dd$E_net[1] > 0) return(dd$B_used[1])
+  B_crossing_from_profile(dd, ycol="E_net", thresh=0, direction="neg_to_pos")
+}
+
+B_cross_from_profile <- function(df_profile, require_Epos = TRUE) {
+  dd <- df_profile %>% filter(is.finite(O2_margin)) %>% arrange(B_used)
+  if (require_Epos) dd <- dd %>% filter(is.finite(E_net), E_net > 0)
+  if (nrow(dd) < 2) return(NA_real_)
+  # O2_margin crosses 0 from positive (slack) to negative (binding) as B increases
+  B_crossing_from_profile(dd, ycol="O2_margin", thresh=0, direction="pos_to_neg")
+}
+
+# ---------- grids ----------
+masses <- 10^seq(-3, 4, length.out = 25)   # 1e-3 to 1e4 g
+Tvals  <- c(5, 30)                         # your cool/warm
+pO2_ref <- 10                              # choose a representative oxygen (kPa); change if desired
+
+# B search grid: widen if needed
+B_seq <- 10^seq(-6, 6, length.out = 800)
+
+# compute only at pO2_ref to focus the allometry figure
+surf_ref <- compute_state_surface(
+  tr,
+  masses     = masses,
+  Tseq       = Tvals,
+  pO2seq     = pO2_ref,
+  prey_units = "biomass",
+  preys      = B_seq,
+  pair_mode  = "cross",
+  D = 3,
+  u_prey = 0
+)
+
+# derive thresholds at each (mass,T)
+thresh_tbl <- surf_ref %>%
+  group_by(mass, T, pO2) %>%
+  group_modify(~tibble(
+    B_E0    = B_E0_from_profile(.x),
+    B_cross = B_cross_from_profile(.x, require_Epos = TRUE)
+  )) %>%
+  ungroup() %>%
+  mutate(log10m = log10(mass),
+         log10_BE0 = log10(B_E0),
+         log10_Bcross = log10(B_cross),
+         T_lbl = factor(paste0(T,"°C"), levels=c("5°C","30°C")))
+
+```
+
+
+```{r}
+p_allom_BE0 <- ggplot(thresh_tbl, aes(x = mass, y = B_E0, color = T_lbl)) +
+  geom_line(linewidth = 1.0, na.rm = TRUE) +
+  geom_point(size = 1.6, na.rm = TRUE) +
+  scale_x_log10(labels = math_format(10^.x)) +
+  scale_y_log10(labels = math_format(10^.x)) +
+  labs(x = "Mass (g)",
+       y = expression(B[E0]~"(break-even prey biomass)"),
+       color = "Temperature") +
+  theme_minimal(base_size = 11) +
+  theme(panel.grid.minor = element_blank())
+
+p_allom_BE0
+
+p_allom_BE0 <- ggplot(thresh_tbl, aes(x = mass, y = B_E0, color = T_lbl)) +
+  geom_line(linewidth = 1.0, na.rm = TRUE) +
+  geom_point(size = 1.6, na.rm = TRUE) +
+  scale_x_log10(labels = math_format(10^.x)) +
+  scale_y_log10(labels = math_format(10^.x)) +
+  labs(x = "Mass (g)",
+       y = expression(B[E0]~"(break-even prey biomass)"),
+       color = "Temperature") +
+  theme_minimal(base_size = 11) +
+  theme(panel.grid.minor = element_blank())
+
+p_allom_BE0
+
+fit_BE0 <- thresh_tbl %>%
+  filter(is.finite(B_E0), B_E0 > 0) %>%
+  group_by(T) %>%
+  do({
+    m <- lm(log10(B_E0) ~ log10(mass), data = .)
+    tibble(slope = coef(m)[2], intercept = coef(m)[1])
+  })
+
+fit_BE0
+
+
+```
+
+
+
+# Temperature growth parameter
+
+```{r}
+# ============================================================
+# FIGURES: E(T) and emergent Q10_E vs pO2, across masses
+# Uses your compute_state_surface() output (E_net, O2_margin, etc.)
+# ============================================================
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(scales)
+
+# ----------------------------
+# 0) Settings
+# ----------------------------
+B_fix  <- 1000
+D_use  <- 3
+u_prey <- 0
+
+# Mass grid for Q10 plot (dense-ish) + a smaller set for the line plot panels
+masses_all   <- 10^seq(-3, 4, by = 0.5)                # 1e-3 ... 1e4 g
+masses_lines <- c(1e-3, 1e-1, 1e1, 1e3, 1e4)           # for faceted E(T) lines
+
+Tseq   <- seq(0, 20, by = 0.5)
+pO2seq <- seq(1, 30, by = 1)                            # avoid 0 for stability
+
+# For the E(T) line plot, show a few pO2 slices
+pO2_slices <- c(30, 15, 8, 4)
+
+# Choose response: use absolute E_net (growth proxy)
+Ecol <- "E_net"     # or "E_net_norm"
+
+
+# ----------------------------
+# 1) Compute surfaces
+# ----------------------------
+
+# (A) Dense for Q10 summary plot
+surf_E_all <- compute_state_surface(
+  tr,
+  masses     = masses_all,
+  Tseq       = Tseq,
+  pO2seq     = pO2seq,
+  prey_units = "biomass",
+  preys      = B_fix,
+  pair_mode  = "cross",
+  D          = D_use,
+  u_prey     = u_prey
+) %>%
+  mutate(
+    E = .data[[Ecol]],
+    feasible = is.finite(U_opt) & is.finite(O2_margin) & is.finite(E),
+    Epos = feasible & (E > 0),
+    oxy_limited = feasible & (O2_margin <= 0)          # hard rule; avoids checkerboard
+  )
+
+# (B) Smaller for E(T) faceted lines (only a few pO2 values)
+surf_E_lines <- surf_E_all %>%
+  filter(mass %in% masses_lines, pO2 %in% pO2_slices)
+
+
+# ----------------------------
+# 2) FIGURE 1: E(T) by pO2, faceted by mass (B fixed)
+# ----------------------------
+
+# Mark oxygen-limited points along curves (O2_margin <= 0)
+p_E_T <- ggplot(surf_E_lines, aes(x = T, y = E, colour = factor(pO2), group = pO2)) +
+  geom_line(linewidth = 0.7, na.rm = TRUE) +
+  # oxygen-limited overlay as points (black)
+  geom_point(
+    data = dplyr::filter(surf_E_lines, oxy_limited),
+    aes(x = T, y = E),
+    inherit.aes = FALSE,
+    colour = "black",
+    size = 1.2,
+    alpha = 0.9
+  ) +
+  facet_wrap(~ mass, scales = "free_y",
+             labeller = labeller(mass = function(x) paste0("m = ", scientific(as.numeric(x)), " g"))) +
+  scale_colour_brewer(palette = "Set1", name = expression(p[O[2]]~"(kPa)")) +
+  labs(
+    x = "Temperature (°C)",
+    y = if (Ecol == "E_net") "Net energy (E_net)" else "Normalized net energy (E_net_norm)",
+    title = paste0("Temperature dependence of ", Ecol, " at B = ", B_fix, " (points = O2 binding)")
+  ) +
+  base_theme +
+  theme(
+    legend.position = "bottom",
+    legend.box = "horizontal"
+  )
+
+p_E_T
+
+
+# ----------------------------
+# 3) Compute emergent Q10 of E
+#    Local Q10 over dt degrees, then summarize (median) over a T window
+# ----------------------------
+
+dt <- 5
+dT <- Tseq[2] - Tseq[1]
+k  <- round(dt / dT)          # number of steps for dt
+
+Q10_tbl <- surf_E_all %>%
+  group_by(mass, pO2) %>%
+  arrange(T, .by_group = TRUE) %>%
+  mutate(
+    E_lead = lead(E, n = k),
+    T_lead = lead(T, n = k),
+    ok_q10 = Epos & is.finite(E_lead) & (E_lead > 0) & is.finite(T_lead),
+    Q10_E  = if_else(ok_q10, (E_lead / E)^(10 / (T_lead - T)), NA_real_)
+  ) %>%
+  ungroup()
+
+# Summarize over a temperature band (adjust if you like)
+T_lo <- 5
+T_hi <- 15
+
+Q10_summary <- Q10_tbl %>%
+  filter(T >= T_lo, T <= T_hi) %>%
+  group_by(mass, pO2) %>%
+  summarize(
+    Q10_E_med = median(Q10_E, na.rm = TRUE),
+    frac_oxy_limited = mean(oxy_limited, na.rm = TRUE),
+    n_q10 = sum(is.finite(Q10_E)),
+    .groups = "drop"
+  ) %>%
+  # keep only profiles with enough points to be meaningful
+  filter(is.finite(Q10_E_med), n_q10 >= 5)
+
+
+# ----------------------------
+# 4) FIGURE 2: Q10_E vs pO2, colored by mass
+# ----------------------------
+
+p_Q10_pO2 <- ggplot(Q10_summary, aes(x = pO2, y = Q10_E_med, group = mass, colour = log10(mass))) +
+  geom_line(linewidth = 0.6, alpha = 0.9) +
+  scale_colour_viridis_c(
+    name = expression(log[10]*"(mass, g)"),
+    option = "D",
+    guide = guide_colorbar(barheight = unit(4, "mm"), frame.colour = "grey50", ticks.colour = "grey50")
+  ) +
+  labs(
+    x = expression(p[O[2]]~"(kPa)"),
+    y = paste0("Emergent Q10 of ", Ecol, " (median, ", T_lo, "–", T_hi, "°C)"),
+    title = paste0("Does hypoxia flatten temperature dependence?  B = ", B_fix, ", dt = ", dt, "°C")
+  ) +
+  coord_cartesian(ylim = c(0.8, NA)) +
+  base_theme +
+  theme(
+    legend.position = "bottom",
+    legend.box = "horizontal"
+  )
+
+p_Q10_pO2
+
+
+# ----------------------------
+# 5) Optional: add a reference line at Q10 = 1.1 (van Denderen-ish)
+# ----------------------------
+p_Q10_pO2 + geom_hline(yintercept = 1.1, linetype = "dashed", linewidth = 0.4)
+
 ```
 
 
