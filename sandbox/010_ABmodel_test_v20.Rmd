@@ -37,7 +37,7 @@ trait_list <- list(
     a_e = 200, b_e=2/3, #200 #2/3                                                         # encounter
     a_c = 60, b_c = 0.75, epsAssim = 0.7, alpha = 0.2,                          # consumption (+ SDA fraction alpha)
     T_ref = 10,
-    Q10_m = 2.00, Q10_a = 1.80, Q10_o = 1.50, Q10_c = 2.00                      # temperature Q10s
+    Q10_m = 2.00, Q10_a = 1.20, Q10_o = 1.50, Q10_c = 2.00                      # temperature Q10s
   )
 )
 
@@ -1588,7 +1588,7 @@ Tseq     <- seq(0, 30, by = 0.1)        # x axis
 pO2seq   <- seq(0, 30, by = 0.1)        # y axis
 
 # Choose TWO fixed prey-index values (rows)
-f_fixed <- c(0.4, 0.9)
+f_fixed <- c(0.6, 0.9)
 
 # Calculate surface in (T, pO2) space at fixed prey index
 surf_F_fixedf <- compute_state_surface(
