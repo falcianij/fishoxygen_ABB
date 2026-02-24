@@ -187,11 +187,11 @@ find_U_opt <- function(pO2_env, T, m, prey, tr, u_prey = 0, D = 3,
   Ustar <- opt$maximum
   st <- solve_pO2_int(Ustar, pO2_env, T, m, prey, tr, u_prey = u_prey, D = D)
 
-  eps <- get_par(tr, c("eps", "epsAssim"), default = 0.7)
   fr <- get_partition_fracs(tr)
-  a_sda <- fr$a_sda
-  Cassim <- eps * st$C_real
-  E_net <- Cassim - (st$Mm + st$Ma)
+  M_SDA <- fr$a_sda * st$C_real
+  M_exc <- fr$a_exc * st$C_real
+  A_assim <- fr$a_assim * st$C_real
+  E_net <- A_assim - (st$Mm + st$Ma)
 
   list(M_m = st$Mm, M_act = st$Ma, Cmax = st$Cmax, Enc = st$Enc,
        C_pot = st$C_pot, C_real = st$C_real, I = st$C_real,
@@ -202,7 +202,7 @@ find_U_opt <- function(pO2_env, T, m, prey, tr, u_prey = 0, D = 3,
        energetic_exclusion = is.finite(E_net) && E_net <= 0,
        D_SDA = M_SDA,
        M_exc = M_exc,
-       A_assim = A_assim
+       A_assim = A_assim)
 }
 
 B_from_f <- function(f_ref, m, tr,
