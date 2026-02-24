@@ -129,23 +129,23 @@ diag_interp <- function(z) interp_surface(d_test, "f_ref", "pO2", z, nx = 140, n
 ```
 
 ```{r test-plots}
-plot_masked(diag_interp("E_net_norm"), "f_ref", "pO2", "E_net_norm", "blue", "E/Cmax", x_limits = c(0,1), y_limits = c(0,30)) + labs(title="Available energy", x="Prey index", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
-plot_masked(diag_interp("U_opt"), "f_ref", "pO2", "U_opt", "viridis", "U*", x_limits = c(0,1), y_limits = c(0,30)) + labs(title="Cruising speed", x="Prey index", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
-plot_masked(diag_interp("f"), "f_ref", "pO2", "f", "green", "f", limits=c(0,1), x_limits = c(0,1), y_limits = c(0,30)) + labs(title="Food limitation", x="Prey index", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
-plot_masked(diag_interp("g"), "f_ref", "pO2", "g", "purple", "g", limits=c(0,1), x_limits = c(0,1), y_limits = c(0,30)) + labs(title="Oxygen limitation", x="Prey index", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
-plot_masked(diag_interp("M_m_norm"), "f_ref", "pO2", "M_m_norm", "red", "M_M/Cmax", x_limits = c(0,1), y_limits = c(0,30)) + labs(title="Basal metabolism", x="Prey index", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
-plot_masked(diag_interp("M_act_norm"), "f_ref", "pO2", "M_act_norm", "red", "M_A/Cmax", x_limits = c(0,1), y_limits = c(0,30)) + labs(title="Active metabolism", x="Prey index", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
-plot_masked(diag_interp("D_SDA_norm"), "f_ref", "pO2", "D_SDA_norm", "red", "M_SDA/Cmax", x_limits = c(0,1), y_limits = c(0,30)) + labs(title="SDA", x="Prey index", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
-plot_masked(diag_interp("M_exc_norm"), "f_ref", "pO2", "M_exc_norm", "red", "Excretion/Cmax", x_limits = c(0,1), y_limits = c(0,30)) + labs(title="Excretion", x="Prey index", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
-plot_masked(diag_interp("A_assim_norm"), "f_ref", "pO2", "A_assim_norm", "blue", "Assim/Cmax", x_limits = c(0,1), y_limits = c(0,30)) + labs(title="Assimilation", x="Prey index", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
-plot_masked(diag_interp("pO2_int"), "f_ref", "pO2", "pO2_int", "purple", expression(p[O[2]]^{int}), x_limits = c(0,1), y_limits = c(0,30)) + labs(title="Internal oxygen", x="Prey index", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
+plot_masked(diag_interp("E_net_norm"), "f_ref", "pO2", "E_net_norm", "blue", "E/Cmax", x_limits = c(0,1), y_limits = c(0,30), mask_df = d_test) + labs(title="Available energy", x="Prey index", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
+plot_masked(diag_interp("U_opt"), "f_ref", "pO2", "U_opt", "viridis", "U*", x_limits = c(0,1), y_limits = c(0,30), mask_df = d_test) + labs(title="Cruising speed", x="Prey index", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
+plot_masked(diag_interp("f"), "f_ref", "pO2", "f", "green", "f", limits=c(0,1), x_limits = c(0,1), y_limits = c(0,30), mask_df = d_test) + labs(title="Food limitation", x="Prey index", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
+plot_masked(diag_interp("g"), "f_ref", "pO2", "g", "purple", "g", limits=c(0,1), x_limits = c(0,1), y_limits = c(0,30), mask_df = d_test) + labs(title="Oxygen limitation", x="Prey index", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
+plot_masked(diag_interp("M_m_norm"), "f_ref", "pO2", "M_m_norm", "red", "M_M/Cmax", x_limits = c(0,1), y_limits = c(0,30), mask_df = d_test) + labs(title="Basal metabolism", x="Prey index", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
+plot_masked(diag_interp("M_act_norm"), "f_ref", "pO2", "M_act_norm", "red", "M_A/Cmax", x_limits = c(0,1), y_limits = c(0,30), mask_df = d_test) + labs(title="Active metabolism", x="Prey index", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
+plot_masked(diag_interp("D_SDA_norm"), "f_ref", "pO2", "D_SDA_norm", "red", "M_SDA/Cmax", x_limits = c(0,1), y_limits = c(0,30), mask_df = d_test) + labs(title="SDA", x="Prey index", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
+plot_masked(diag_interp("M_exc_norm"), "f_ref", "pO2", "M_exc_norm", "red", "Excretion/Cmax", x_limits = c(0,1), y_limits = c(0,30), mask_df = d_test) + labs(title="Excretion", x="Prey index", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
+plot_masked(diag_interp("A_assim_norm"), "f_ref", "pO2", "A_assim_norm", "blue", "Assim/Cmax", x_limits = c(0,1), y_limits = c(0,30), mask_df = d_test) + labs(title="Assimilation", x="Prey index", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
+plot_masked(diag_interp("pO2_int"), "f_ref", "pO2", "pO2_int", "purple", expression(p[O[2]]^{int}), x_limits = c(0,1), y_limits = c(0,30), mask_df = d_test) + labs(title="Internal oxygen", x="Prey index", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
 ```
 
 ## 2) pO2 vs prey density (four separate 4-panel plots)
 
 ```{r prey-data}
 d_prey <- compute_state_surface(tr, masses=c(1e0,1e4), Tseq=c(5,25), pO2seq=pO2seq,
-                                preys=10^seq(-3,4,length.out=180), prey_units="biomass", pair_mode="cross", progress=TRUE) %>%
+                                preys=seq(1e-3,1e4,length.out=180), prey_units="biomass", pair_mode="cross", progress=TRUE) %>%
   add_masks() %>%
   mutate(mass_lab=factor(mass, levels=c(1e0,1e4), labels=c("m = 1e0 g","m = 1e4 g")),
          T_lab=factor(T, levels=c(5,25), labels=c("T = 5°C","T = 25°C")))
@@ -154,15 +154,15 @@ interp_prey <- function(z) d_prey
 ```
 
 ```{r prey-E}
-plot_masked(interp_prey("E_net_norm"), "B_used", "pO2", "E_net_norm", "blue", "E/Cmax", x_limits = c(1e-3, 1e4), y_limits = c(0,30), x_trans = "log10", mask_df = d_prey) + facet_grid2(rows=vars(T_lab), cols=vars(mass_lab)) + labs(title="Available energy", x="Prey biomass density (log10)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
+plot_masked(interp_prey("E_net_norm"), "B_used", "pO2", "E_net_norm", "blue", "E/Cmax", x_limits = c(1e-3, 1e4), y_limits = c(0,30) , mask_df = d_prey) + facet_grid2(rows=vars(T_lab), cols=vars(mass_lab)) + labs(title="Available energy", x="Prey biomass density", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
 ```
 
 ```{r prey-f}
-plot_masked(interp_prey("f"), "B_used", "pO2", "f", "green", "f", limits=c(0,1), x_limits = c(1e-3, 1e4), y_limits = c(0,30), x_trans = "log10", mask_df = d_prey) + facet_grid2(rows=vars(T_lab), cols=vars(mass_lab)) + labs(title="Food limitation", x="Prey biomass density (log10)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
+plot_masked(interp_prey("f"), "B_used", "pO2", "f", "green", "f", limits=c(0,1), x_limits = c(1e-3, 1e4), y_limits = c(0,30) , mask_df = d_prey) + facet_grid2(rows=vars(T_lab), cols=vars(mass_lab)) + labs(title="Food limitation", x="Prey biomass density", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
 ```
 
 ```{r prey-g}
-plot_masked(interp_prey("g"), "B_used", "pO2", "g", "purple", "g", limits=c(0,1), x_limits = c(1e-3, 1e4), y_limits = c(0,30), x_trans = "log10", mask_df = d_prey) + facet_grid2(rows=vars(T_lab), cols=vars(mass_lab)) + labs(title="Oxygen limitation", x="Prey biomass density (log10)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
+plot_masked(interp_prey("g"), "B_used", "pO2", "g", "purple", "g", limits=c(0,1), x_limits = c(1e-3, 1e4), y_limits = c(0,30) , mask_df = d_prey) + facet_grid2(rows=vars(T_lab), cols=vars(mass_lab)) + labs(title="Oxygen limitation", x="Prey biomass density", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
 ```
 
 ```{r prey-u}
@@ -170,8 +170,8 @@ plot_masked(interp_prey("g"), "B_used", "pO2", "g", "purple", "g", limits=c(0,1)
 u_m1 <- d_prey %>% filter(mass == 1e0) %>% interp_surface("B_used", "pO2", "U_opt", facet_cols = c("T_lab"))
 u_m2 <- d_prey %>% filter(mass == 1e4) %>% interp_surface("B_used", "pO2", "U_opt", facet_cols = c("T_lab"))
 
-p_u_m1 <- plot_masked(u_m1, "B_used", "pO2", "U_opt", "viridis", "U* (m=1e0)", x_limits = c(1e-3, 1e4), y_limits = c(0,30), x_trans = "log10", mask_df = d_prey %>% filter(mass == 1e0)) + facet_grid2(rows=vars(T_lab), cols=vars()) + labs(title="Cruising speed", x="Prey biomass density (log10)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
-p_u_m2 <- plot_masked(u_m2, "B_used", "pO2", "U_opt", "viridis", "U* (m=1e4)", x_limits = c(1e-3, 1e4), y_limits = c(0,30), x_trans = "log10", mask_df = d_prey %>% filter(mass == 1e4)) + facet_grid2(rows=vars(T_lab), cols=vars()) + labs(title="Cruising speed", x="Prey biomass density (log10)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
+p_u_m1 <- plot_masked(u_m1, "B_used", "pO2", "U_opt", "viridis", "U* (m=1e0)", x_limits = c(1e-3, 1e4), y_limits = c(0,30) , mask_df = d_prey %>% filter(mass == 1e0)) + facet_grid2(rows=vars(T_lab), cols=vars()) + labs(title="Cruising speed", x="Prey biomass density", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
+p_u_m2 <- plot_masked(u_m2, "B_used", "pO2", "U_opt", "viridis", "U* (m=1e4)", x_limits = c(1e-3, 1e4), y_limits = c(0,30) , mask_df = d_prey %>% filter(mass == 1e4)) + facet_grid2(rows=vars(T_lab), cols=vars()) + labs(title="Cruising speed", x="Prey biomass density", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
 
 p_u_m1 | p_u_m2
 ```
