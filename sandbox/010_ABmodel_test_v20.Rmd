@@ -200,7 +200,7 @@ d_prey <- compute_state_surface(tr, masses=c(1e0,1e4), Tseq=c(5,25), pO2seq=pO2s
   mutate(mass_lab=factor(mass, levels=c(1e0,1e4), labels=c("m = 1e0 g","m = 1e4 g")),
          T_lab=factor(T, levels=c(5,25), labels=c("T = 5°C","T = 25°C")))
 
-interp_prey <- function(z) interp_surface(d_prey, "B_used", "pO2", z, facet_cols = c("mass_lab","T_lab"), nx = 300, ny = 300)
+interp_prey <- function(z) d_prey  # keep raw dense grid for stability
 ```
 
 ```{r prey-E}
@@ -236,7 +236,7 @@ d_temp <- compute_state_surface(tr, masses=c(1e0,1e4), Tseq=seq(0,40,by=0.25), p
   mutate(mass_lab=factor(mass, levels=c(1e0,1e4), labels=c("m = 1e0 g","m = 1e4 g")),
          f_lab=factor(f_ref, levels=c(0.9,0.6), labels=c("prey index = 0.9","prey index = 0.6")))
 
-interp_temp <- function(z) interp_surface(d_temp, "T", "pO2", z, facet_cols = c("mass_lab","f_lab"), nx = 300, ny = 300)
+interp_temp <- function(z) d_temp  # keep raw dense grid for stability
 ```
 
 ```{r temp-E}

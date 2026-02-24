@@ -151,8 +151,12 @@ interp_to_grid <- function(df, xcol, ycol, zcol, nx = 500, ny = 500) {
   out <- expand.grid(stats::setNames(list(xo, yo), c(xcol, ycol)))
 
   zvec <- as.vector(ip$z)
-  if (length(zvec) != nrow(out)) {
-    zvec <- rep_len(zvec, nrow(out))
+  expected <- nrow(out)
+
+  # If interpolation returns an unexpected shape, fall back to original finite points
+  # instead of repeating a single value across the full grid.
+  if (length(zvec) != expected) {
+    return(df[ok, c(xcol, ycol, zcol), drop = FALSE])
   }
 
   out[[zcol]] <- zvec
