@@ -72,14 +72,16 @@ interp_surface <- function(df, x, y, z, facet_cols = character(0), nx = 140, ny 
 
 plot_masked <- function(df, x, y, z, palette = c("blue", "viridis", "green", "purple", "red"),
                         fill_title = "", limits = NULL, x_limits = NULL, y_limits = NULL,
-                        x_trans = c("identity", "log10"), contour_n = 5) {
+                        x_trans = c("identity", "log10"), contour_n = 5, mask_df = NULL) {
   palette <- match.arg(palette)
   x_trans <- match.arg(x_trans)
+  if (is.null(mask_df)) mask_df <- df
+
   p <- ggplot(df, aes(x = .data[[x]], y = .data[[y]])) +
     geom_raster(data = df %>% filter(!excl_o2, !excl_e), aes(fill = .data[[z]]), interpolate = TRUE) +
     geom_contour(data = df %>% filter(!excl_o2, !excl_e), aes(z = .data[[z]]), bins = contour_n, linetype = "dashed", linewidth = 0.25, colour = "black", alpha = 0.7) +
-    geom_raster(data = df %>% filter(excl_e), fill = "grey70", interpolate = TRUE) +
-    geom_raster(data = df %>% filter(excl_o2), fill = "black", interpolate = TRUE)
+    geom_raster(data = mask_df %>% filter(excl_e), fill = "grey70", interpolate = FALSE) +
+    geom_raster(data = mask_df %>% filter(excl_o2), fill = "black", interpolate = FALSE)
 
   if (palette == "blue") p <- p + scale_fill_gradient(low = "#f7fbff", high = "#2171b5", name = fill_title, limits = limits, oob = squish, guide = guide_clean())
   if (palette == "viridis") p <- p + scale_fill_viridis_c(option = "D", name = fill_title, limits = limits, oob = squish, guide = guide_clean())
@@ -148,19 +150,19 @@ d_prey <- compute_state_surface(tr, masses=c(1e0,1e4), Tseq=c(5,25), pO2seq=pO2s
   mutate(mass_lab=factor(mass, levels=c(1e0,1e4), labels=c("m = 1e0 g","m = 1e4 g")),
          T_lab=factor(T, levels=c(5,25), labels=c("T = 5°C","T = 25°C")))
 
-interp_prey <- function(z) interp_surface(d_prey, "B_used", "pO2", z, facet_cols = c("mass_lab","T_lab"), nx = 110, ny = 110)
+interp_prey <- function(z) d_prey
 ```
 
 ```{r prey-E}
-plot_masked(interp_prey("E_net_norm"), "B_used", "pO2", "E_net_norm", "blue", "E/Cmax", x_limits = c(1e-3, 1e4), y_limits = c(0,30), x_trans = "log10") + facet_grid2(rows=vars(T_lab), cols=vars(mass_lab)) + labs(title="Available energy", x="Prey biomass density (log10)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
+plot_masked(interp_prey("E_net_norm"), "B_used", "pO2", "E_net_norm", "blue", "E/Cmax", x_limits = c(1e-3, 1e4), y_limits = c(0,30), x_trans = "log10", mask_df = d_prey) + facet_grid2(rows=vars(T_lab), cols=vars(mass_lab)) + labs(title="Available energy", x="Prey biomass density (log10)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
 ```
 
 ```{r prey-f}
-plot_masked(interp_prey("f"), "B_used", "pO2", "f", "green", "f", limits=c(0,1), x_limits = c(1e-3, 1e4), y_limits = c(0,30), x_trans = "log10") + facet_grid2(rows=vars(T_lab), cols=vars(mass_lab)) + labs(title="Food limitation", x="Prey biomass density (log10)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
+plot_masked(interp_prey("f"), "B_used", "pO2", "f", "green", "f", limits=c(0,1), x_limits = c(1e-3, 1e4), y_limits = c(0,30), x_trans = "log10", mask_df = d_prey) + facet_grid2(rows=vars(T_lab), cols=vars(mass_lab)) + labs(title="Food limitation", x="Prey biomass density (log10)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
 ```
 
 ```{r prey-g}
-plot_masked(interp_prey("g"), "B_used", "pO2", "g", "purple", "g", limits=c(0,1), x_limits = c(1e-3, 1e4), y_limits = c(0,30), x_trans = "log10") + facet_grid2(rows=vars(T_lab), cols=vars(mass_lab)) + labs(title="Oxygen limitation", x="Prey biomass density (log10)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
+plot_masked(interp_prey("g"), "B_used", "pO2", "g", "purple", "g", limits=c(0,1), x_limits = c(1e-3, 1e4), y_limits = c(0,30), x_trans = "log10", mask_df = d_prey) + facet_grid2(rows=vars(T_lab), cols=vars(mass_lab)) + labs(title="Oxygen limitation", x="Prey biomass density (log10)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
 ```
 
 ```{r prey-u}
@@ -168,8 +170,8 @@ plot_masked(interp_prey("g"), "B_used", "pO2", "g", "purple", "g", limits=c(0,1)
 u_m1 <- d_prey %>% filter(mass == 1e0) %>% interp_surface("B_used", "pO2", "U_opt", facet_cols = c("T_lab"))
 u_m2 <- d_prey %>% filter(mass == 1e4) %>% interp_surface("B_used", "pO2", "U_opt", facet_cols = c("T_lab"))
 
-p_u_m1 <- plot_masked(u_m1, "B_used", "pO2", "U_opt", "viridis", "U* (m=1e0)", x_limits = c(1e-3, 1e4), y_limits = c(0,30), x_trans = "log10") + facet_grid2(rows=vars(T_lab), cols=vars()) + labs(title="Cruising speed", x="Prey biomass density (log10)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
-p_u_m2 <- plot_masked(u_m2, "B_used", "pO2", "U_opt", "viridis", "U* (m=1e4)", x_limits = c(1e-3, 1e4), y_limits = c(0,30), x_trans = "log10") + facet_grid2(rows=vars(T_lab), cols=vars()) + labs(title="Cruising speed", x="Prey biomass density (log10)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
+p_u_m1 <- plot_masked(u_m1, "B_used", "pO2", "U_opt", "viridis", "U* (m=1e0)", x_limits = c(1e-3, 1e4), y_limits = c(0,30), x_trans = "log10", mask_df = d_prey %>% filter(mass == 1e0)) + facet_grid2(rows=vars(T_lab), cols=vars()) + labs(title="Cruising speed", x="Prey biomass density (log10)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
+p_u_m2 <- plot_masked(u_m2, "B_used", "pO2", "U_opt", "viridis", "U* (m=1e4)", x_limits = c(1e-3, 1e4), y_limits = c(0,30), x_trans = "log10", mask_df = d_prey %>% filter(mass == 1e4)) + facet_grid2(rows=vars(T_lab), cols=vars()) + labs(title="Cruising speed", x="Prey biomass density (log10)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
 
 p_u_m1 | p_u_m2
 ```
@@ -183,27 +185,27 @@ d_temp <- compute_state_surface(tr, masses=c(1e0,1e4), Tseq=seq(0,40,by=0.25), p
   mutate(mass_lab=factor(mass, levels=c(1e0,1e4), labels=c("m = 1e0 g","m = 1e4 g")),
          f_lab=factor(f_ref, levels=c(0.9,0.6), labels=c("prey index = 0.9","prey index = 0.6")))
 
-interp_temp <- function(z) interp_surface(d_temp, "T", "pO2", z, facet_cols = c("mass_lab","f_lab"), nx = 120, ny = 120)
+interp_temp <- function(z) d_temp
 ```
 
 ```{r temp-E}
-plot_masked(interp_temp("E_net_norm"), "T", "pO2", "E_net_norm", "blue", "E/Cmax", x_limits = c(0,40), y_limits = c(0,30)) + facet_grid2(rows=vars(f_lab), cols=vars(mass_lab)) + labs(title="Available energy", x="Temperature (°C)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
+plot_masked(interp_temp("E_net_norm"), "T", "pO2", "E_net_norm", "blue", "E/Cmax", x_limits = c(0,40), y_limits = c(0,30), mask_df = d_temp) + facet_grid2(rows=vars(f_lab), cols=vars(mass_lab)) + labs(title="Available energy", x="Temperature (°C)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
 ```
 
 ```{r temp-f}
-plot_masked(interp_temp("f"), "T", "pO2", "f", "green", "f", limits=c(0,1), x_limits = c(0,40), y_limits = c(0,30)) + facet_grid2(rows=vars(f_lab), cols=vars(mass_lab)) + labs(title="Food limitation", x="Temperature (°C)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
+plot_masked(interp_temp("f"), "T", "pO2", "f", "green", "f", limits=c(0,1), x_limits = c(0,40), y_limits = c(0,30), mask_df = d_temp) + facet_grid2(rows=vars(f_lab), cols=vars(mass_lab)) + labs(title="Food limitation", x="Temperature (°C)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
 ```
 
 ```{r temp-g}
-plot_masked(interp_temp("g"), "T", "pO2", "g", "purple", "g", limits=c(0,1), x_limits = c(0,40), y_limits = c(0,30)) + facet_grid2(rows=vars(f_lab), cols=vars(mass_lab)) + labs(title="Oxygen limitation", x="Temperature (°C)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
+plot_masked(interp_temp("g"), "T", "pO2", "g", "purple", "g", limits=c(0,1), x_limits = c(0,40), y_limits = c(0,30), mask_df = d_temp) + facet_grid2(rows=vars(f_lab), cols=vars(mass_lab)) + labs(title="Oxygen limitation", x="Temperature (°C)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
 ```
 
 ```{r temp-u}
 uT_m1 <- d_temp %>% filter(mass == 1e0) %>% interp_surface("T", "pO2", "U_opt", facet_cols = c("f_lab"))
 uT_m2 <- d_temp %>% filter(mass == 1e4) %>% interp_surface("T", "pO2", "U_opt", facet_cols = c("f_lab"))
 
-p_uT_m1 <- plot_masked(uT_m1, "T", "pO2", "U_opt", "viridis", "U* (m=1e0)", x_limits = c(0,40), y_limits = c(0,30)) + facet_grid2(rows=vars(f_lab), cols=vars()) + labs(title="Cruising speed", x="Temperature (°C)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
-p_uT_m2 <- plot_masked(uT_m2, "T", "pO2", "U_opt", "viridis", "U* (m=1e4)", x_limits = c(0,40), y_limits = c(0,30)) + facet_grid2(rows=vars(f_lab), cols=vars()) + labs(title="Cruising speed", x="Temperature (°C)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
+p_uT_m1 <- plot_masked(uT_m1, "T", "pO2", "U_opt", "viridis", "U* (m=1e0)", x_limits = c(0,40), y_limits = c(0,30), mask_df = d_temp %>% filter(mass == 1e0)) + facet_grid2(rows=vars(f_lab), cols=vars()) + labs(title="Cruising speed", x="Temperature (°C)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
+p_uT_m2 <- plot_masked(uT_m2, "T", "pO2", "U_opt", "viridis", "U* (m=1e4)", x_limits = c(0,40), y_limits = c(0,30), mask_df = d_temp %>% filter(mass == 1e4)) + facet_grid2(rows=vars(f_lab), cols=vars()) + labs(title="Cruising speed", x="Temperature (°C)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
 
 p_uT_m1 | p_uT_m2
 ```
