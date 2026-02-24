@@ -9,14 +9,13 @@ library(here)
 library(tidyverse)
 library(scales)
 library(patchwork)
-library(ggtext)
 library(ggh4x)
+library(viridis)
 
 # Source model + analysis + diagnostics scripts
 file_sources <- list.files(here("scripts"), pattern = "*.R$", full.names = TRUE)
 invisible(lapply(file_sources, source))
 
-# Theme
 base_theme <- theme_minimal(base_size = 9) +
   theme(
     panel.grid.minor = element_blank(),
@@ -26,264 +25,310 @@ base_theme <- theme_minimal(base_size = 9) +
     strip.text = element_text(size = 8),
     legend.position = "bottom",
     legend.title = element_text(size = 8),
-    legend.text = element_text(size = 7)
+    legend.text = element_text(size = 7),
+    panel.spacing = unit(0.8, "lines"),
+    plot.margin = margin(4, 4, 4, 4)
   )
 
+square_theme <- theme(aspect.ratio = 1)
+
 label_mass <- function(x) paste0("m = ", format(x, scientific = TRUE), " g")
-label_f <- function(x) paste0("prey index = ", sprintf("%.2f", x))
+label_temp <- function(x) paste0("T = ", x, "°C")
+label_f <- function(x) paste0("f = ", sprintf("%.2f", x))
+
+add_masks <- function(df) {
+  df %>%
+    mutate(
+      oxygen_exclusion = as.logical(round(as.numeric(oxygen_exclusion))),
+      energetic_exclusion = as.logical(round(as.numeric(energetic_exclusion))),
+      energetic_exclusion = if_else(is.na(energetic_exclusion), FALSE, energetic_exclusion),
+      excl_o2 = oxygen_exclusion,
+      excl_e = !excl_o2 & energetic_exclusion
+    )
+}
+
+plot_surface_masked <- function(df, x, y, z, palette = c("gradient", "viridis", "greens", "purples", "reds"),
+                                title = "", fill_title = "", limits = NULL) {
+  palette <- match.arg(palette)
+
+  p <- ggplot(df, aes(x = .data[[x]], y = .data[[y]])) +
+    geom_raster(data = df %>% filter(!excl_o2, !excl_e), aes(fill = .data[[z]]), interpolate = TRUE) +
+    geom_raster(data = df %>% filter(excl_e), fill = "grey70", interpolate = TRUE) +
+    geom_raster(data = df %>% filter(excl_o2), fill = "black", interpolate = TRUE)
+
+  if (palette == "gradient") {
+    p <- p + scale_fill_gradient(
+      low = "white", high = "#2171b5", name = fill_title,
+      na.value = "black", limits = limits, oob = squish
+    )
+  }
+  if (palette == "viridis") {
+    p <- p + scale_fill_viridis_c(option = "D", name = fill_title, na.value = "black", limits = limits, oob = squish)
+  }
+  if (palette == "greens") {
+    p <- p + scale_fill_gradient(low = "#f7fcf5", high = "#238b45", name = fill_title, na.value = "black", limits = limits, oob = squish)
+  }
+  if (palette == "purples") {
+    p <- p + scale_fill_gradient(low = "#fcfbfd", high = "#6a51a3", name = fill_title, na.value = "black", limits = limits, oob = squish)
+  }
+  if (palette == "reds") {
+    p <- p + scale_fill_gradient(low = "#fff5f0", high = "#cb181d", name = fill_title, na.value = "black", limits = limits, oob = squish)
+  }
+
+  p +
+    labs(title = title, x = x, y = y) +
+    base_theme +
+    square_theme
+}
 ```
 
 ## Traits
 
 ```{r traits}
-trait_list <- list(
-  largePel = list(
-    # Activity metabolism
-    a_a = 80, b_R = 0.85,
-
-    # Oxygen conductance fallback (a_O = a_g / hm)
-    a_g = 3, hm = 1,
-
-    # Basal fallback via a_M = f_m * a_c
-    f_m = 0.1, b_m = 0.75,
-
-    # Encounter
-    a_e = 200, b_e = 2/3,
-
-    # Processing capacity
-    a_c = 60, b_c = 0.75,
-
-    # Efficiencies
-    epsAssim = 0.7,
-    alpha = 0.2,
-
-    # O2 kinetics
-    K = 2.0,
-    h = 2.0,
-
-    # Temperature
-    T_ref = 10,
-    Q10_m = 2.00, Q10_a = 1.20, Q10_o = 1.50, Q10_c = 2.00
-  )
+tr <- list(
+  a_a = 80, b_R = 0.85,
+  a_g = 3, hm = 1,
+  f_m = 0.1, b_m = 0.75,
+  a_e = 200, b_e = 2 / 3,
+  a_c = 60, b_c = 0.75,
+  epsAssim = 0.7,
+  alpha = 0.2,
+  K = 2.0,
+  h = 2.0,
+  T_ref = 10,
+  Q10_m = 2.00, Q10_a = 1.20, Q10_o = 1.50, Q10_c = 2.00
 )
-
-tr <- trait_list[["largePel"]]
 ```
 
-## Grids and helper plotting wrappers
+## Setup A: pO2 vs prey density (mass columns, temperature rows)
 
-```{r grids}
-# Main plotting grids
-mass_pair <- c(1e2, 1e4)
-T_pair <- c(5, 20)
-f_pair <- c(0.2, 0.8)
-
+```{r setup-a-data}
+masses_a <- c(1e0, 1e4)
+Temps_a <- c(5, 20)
+prey_B_seq <- seq(0.01, 5, by = 0.03)
 pO2seq <- seq(0, 30, by = 0.2)
-f_seq <- seq(0.01, 0.99, by = 0.01)
+
+surf_a <- compute_state_surface(
+  tr = tr,
+  masses = masses_a,
+  Tseq = Temps_a,
+  pO2seq = pO2seq,
+  preys = prey_B_seq,
+  prey_units = "biomass",
+  pair_mode = "cross",
+  progress = TRUE
+) %>%
+  add_regime_labels_ingestion() %>%
+  add_masks() %>%
+  mutate(
+    mass_lab = factor(mass, levels = masses_a, labels = label_mass(masses_a)),
+    T_lab = factor(T, levels = Temps_a, labels = label_temp(Temps_a))
+  )
+```
+
+```{r setup-a-4panel}
+pA_E <- plot_surface_masked(
+  surf_a, x = "B_used", y = "pO2", z = "E_net_norm",
+  palette = "gradient", title = "Available energy", fill_title = "E/Cmax"
+) +
+  facet_grid2(rows = vars(T_lab), cols = vars(mass_lab)) +
+  labs(x = "Prey biomass density", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
+
+pA_U <- plot_surface_masked(
+  surf_a, x = "B_used", y = "pO2", z = "U_opt",
+  palette = "viridis", title = "Cruising speed", fill_title = "U*"
+) +
+  facet_grid2(rows = vars(T_lab), cols = vars(mass_lab)) +
+  labs(x = "Prey biomass density", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
+
+pA_f <- plot_surface_masked(
+  surf_a, x = "B_used", y = "pO2", z = "f",
+  palette = "greens", title = "Food limitation metric", fill_title = "f = Cpot/Cmax", limits = c(0, 1)
+) +
+  facet_grid2(rows = vars(T_lab), cols = vars(mass_lab)) +
+  labs(x = "Prey biomass density", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
+
+pA_g <- plot_surface_masked(
+  surf_a, x = "B_used", y = "pO2", z = "g",
+  palette = "purples", title = "Oxygen limitation metric", fill_title = "g = Creal/Cpot", limits = c(0, 1)
+) +
+  facet_grid2(rows = vars(T_lab), cols = vars(mass_lab)) +
+  labs(x = "Prey biomass density", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
+
+(pA_E | pA_U) / (pA_f | pA_g)
+```
+
+## Setup B: pO2 vs temperature (mass columns, prey-index rows)
+
+```{r setup-b-data}
+masses_b <- c(1e0, 1e4)
+f_rows <- c(0.9, 0.6)
 Tseq <- seq(0, 25, by = 0.25)
 
-# Wrapper to standardize panel look
-panel_raster_contour <- function(df, x, y, z, title, fill_lab,
-                                 low = "#7f0000", mid = "white", high = "#08519c",
-                                 midpoint = 0, limits = NULL) {
-  p <- ggplot(df, aes(x = .data[[x]], y = .data[[y]], fill = .data[[z]])) +
-    geom_raster(interpolate = TRUE) +
-    geom_contour(aes(z = .data[[z]]), color = "black", linewidth = 0.25, alpha = 0.7, bins = 6) +
-    scale_fill_gradient2(
-      low = low, mid = mid, high = high,
-      midpoint = midpoint, limits = limits,
-      oob = squish, na.value = "grey10", name = fill_lab
-    ) +
-    labs(title = title, x = x, y = y) +
-    base_theme
-  p
-}
-
-panel_raster_seq <- function(df, x, y, z, title, fill_lab) {
-  ggplot(df, aes(x = .data[[x]], y = .data[[y]], fill = .data[[z]])) +
-    geom_raster(interpolate = TRUE) +
-    scale_fill_viridis_c(name = fill_lab, na.value = "grey10") +
-    labs(title = title, x = x, y = y) +
-    base_theme
-}
+surf_b <- compute_state_surface(
+  tr = tr,
+  masses = masses_b,
+  Tseq = Tseq,
+  pO2seq = pO2seq,
+  preys = f_rows,
+  prey_units = "prey_index",
+  pair_mode = "cross",
+  progress = TRUE
+) %>%
+  add_regime_labels_ingestion() %>%
+  add_masks() %>%
+  mutate(
+    mass_lab = factor(mass, levels = masses_b, labels = label_mass(masses_b)),
+    f_lab = factor(f_ref, levels = f_rows, labels = label_f(f_rows))
+  )
 ```
 
-## A) Oxygen × food limitation over size and temperature (4 panels)
+```{r setup-b-4panel}
+pB_E <- plot_surface_masked(
+  surf_b, x = "T", y = "pO2", z = "E_net_norm",
+  palette = "gradient", title = "Available energy", fill_title = "E/Cmax"
+) +
+  facet_grid2(rows = vars(f_lab), cols = vars(mass_lab)) +
+  labs(x = "Temperature (°C)", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
 
-```{r surface-o2-food, message=FALSE, warning=FALSE}
-surf_o2_food <- compute_state_surface(
+pB_U <- plot_surface_masked(
+  surf_b, x = "T", y = "pO2", z = "U_opt",
+  palette = "viridis", title = "Cruising speed", fill_title = "U*"
+) +
+  facet_grid2(rows = vars(f_lab), cols = vars(mass_lab)) +
+  labs(x = "Temperature (°C)", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
+
+pB_f <- plot_surface_masked(
+  surf_b, x = "T", y = "pO2", z = "f",
+  palette = "greens", title = "Food limitation metric", fill_title = "f = Cpot/Cmax", limits = c(0, 1)
+) +
+  facet_grid2(rows = vars(f_lab), cols = vars(mass_lab)) +
+  labs(x = "Temperature (°C)", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
+
+pB_g <- plot_surface_masked(
+  surf_b, x = "T", y = "pO2", z = "g",
+  palette = "purples", title = "Oxygen limitation metric", fill_title = "g = Creal/Cpot", limits = c(0, 1)
+) +
+  facet_grid2(rows = vars(f_lab), cols = vars(mass_lab)) +
+  labs(x = "Temperature (°C)", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
+
+(pB_E | pB_U) / (pB_f | pB_g)
+```
+
+## pO2 vs prey-index diagnostics (individual scales + p_int)
+
+```{r pO2-prey-diagnostics-data}
+m_diag <- 1e4
+T_diag <- 5
+f_seq <- seq(0.01, 0.99, by = 0.01)
+
+surf_diag <- compute_state_surface(
   tr = tr,
-  masses = mass_pair,
-  Tseq = T_pair,
+  masses = m_diag,
+  Tseq = T_diag,
   pO2seq = pO2seq,
   preys = f_seq,
   prey_units = "prey_index",
   pair_mode = "cross",
   progress = TRUE
 ) %>%
-  add_regime_labels_ingestion()
-
-surf_o2_food <- surf_o2_food %>%
+  add_masks() %>%
   mutate(
-    mass_lab = factor(mass, levels = mass_pair, labels = label_mass(mass_pair)),
-    T_lab = factor(T, levels = T_pair, labels = paste0("T = ", T_pair, "°C"))
+    M_m_norm = M_m / Cmax,
+    M_act_norm = M_act / Cmax,
+    D_SDA_norm = D_SDA / Cmax,
+    Assim_norm = consump / Cmax
   )
 ```
 
-```{r fig-o2-food-energy}
-p_o2_food_energy <- panel_raster_contour(
-  surf_o2_food,
-  x = "f_ref", y = "pO2", z = "E_net_norm",
-  title = "Available energy",
-  fill_lab = "E_avail / Cmax",
-  midpoint = 0
-) +
-  facet_grid2(rows = vars(mass_lab), cols = vars(T_lab), independent = "none") +
+```{r pO2-prey-diagnostics-plots}
+pD_E <- plot_surface_masked(surf_diag, "f_ref", "pO2", "E_net_norm", "gradient", "Available energy", "E/Cmax") +
   labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
 
-p_o2_food_energy
+pD_U <- plot_surface_masked(surf_diag, "f_ref", "pO2", "U_opt", "viridis", "Cruising speed", "U*") +
+  labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
+
+pD_Mm <- plot_surface_masked(surf_diag, "f_ref", "pO2", "M_m_norm", "reds", "Maintenance", "M_m/Cmax") +
+  labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
+
+pD_Ma <- plot_surface_masked(surf_diag, "f_ref", "pO2", "M_act_norm", "reds", "Activity", "M_act/Cmax") +
+  labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
+
+pD_SDA <- plot_surface_masked(surf_diag, "f_ref", "pO2", "D_SDA_norm", "reds", "SDA", "SDA/Cmax") +
+  labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
+
+pD_f <- plot_surface_masked(surf_diag, "f_ref", "pO2", "f", "greens", "Food limitation metric", "f", limits = c(0, 1)) +
+  labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
+
+pD_g <- plot_surface_masked(surf_diag, "f_ref", "pO2", "g", "purples", "Oxygen limitation metric", "g", limits = c(0, 1)) +
+  labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
+
+pD_pint <- plot_surface_masked(surf_diag, "f_ref", "pO2", "pO2_int", "purples", "Internal oxygen", expression(p[O[2]]^{int})) +
+  labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
+
+(pD_E | pD_U) / (pD_Mm | pD_Ma) / (pD_SDA | pD_f) / (pD_g | pD_pint)
 ```
 
-```{r fig-o2-food-limitations}
-p_o2_food_g <- panel_raster_seq(
-  surf_o2_food,
-  x = "f_ref", y = "pO2", z = "g",
-  title = "Oxygen throttling fraction",
-  fill_lab = "g = C_real/C_pot"
-) +
-  facet_grid2(rows = vars(mass_lab), cols = vars(T_lab), independent = "none") +
-  labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
+## Metabolic allocation (stacked, normalized by Cmax, x = size)
 
-p_o2_food_f <- panel_raster_seq(
-  surf_o2_food,
-  x = "f_ref", y = "pO2", z = "f",
-  title = "Feeding level",
-  fill_lab = "f = C_pot/Cmax"
-) +
-  facet_grid2(rows = vars(mass_lab), cols = vars(T_lab), independent = "none") +
-  labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
+```{r metabolic-allocation-stacked}
+mass_seq <- 10^seq(0, 4, length.out = 80)
+scenarios <- tidyr::expand_grid(
+  T = c(5, 20),
+  pO2 = c(5, 20),
+  f_ref = c(0.6, 0.9)
+)
 
-p_o2_food_regime <- ggplot(surf_o2_food, aes(f_ref, pO2, fill = regime)) +
-  geom_raster(interpolate = TRUE) +
-  facet_grid2(rows = vars(mass_lab), cols = vars(T_lab), independent = "none") +
-  scale_fill_manual(values = c(
-    "Prey limited" = "#4daf4a",
-    "Oxygen-limited processing" = "#377eb8",
-    "Co-limited" = "#984ea3",
-    "Energetic exclusion" = "#ff7f00",
-    "Oxygen exclusion" = "#e41a1c",
-    "Unclassified" = "grey70"
-  )) +
-  labs(
-    title = "Limitation regimes",
-    x = "Prey index",
-    y = expression("Oxygen,"~p[O[2]]~" (kPa)")
-  ) +
-  base_theme
-
-(p_o2_food_g | p_o2_food_f) / p_o2_food_regime
-```
-
-## B) Oxygen × temperature limitation over size and food (4 panels)
-
-```{r surface-o2-temp, message=FALSE, warning=FALSE}
-surf_o2_temp <- compute_state_surface(
-  tr = tr,
-  masses = mass_pair,
-  Tseq = Tseq,
-  pO2seq = pO2seq,
-  preys = f_pair,
-  prey_units = "prey_index",
-  pair_mode = "cross",
-  progress = TRUE
-) %>%
-  add_regime_labels_ingestion()
-
-surf_o2_temp <- surf_o2_temp %>%
-  mutate(
-    mass_lab = factor(mass, levels = mass_pair, labels = label_mass(mass_pair)),
-    f_lab = factor(f_ref, levels = f_pair, labels = label_f(f_pair))
+alloc_long <- purrr::pmap_dfr(scenarios, function(T, pO2, f_ref) {
+  B_vec <- B_from_f(
+    f_ref = rep(f_ref, length(mass_seq)),
+    m = mass_seq,
+    tr = tr,
+    T_ref = T,
+    pO2_ref = pO2,
+    U_lo = 1e-5,
+    U_mech = 5,
+    enforce_O2_feasible = TRUE,
+    D = 3
   )
-```
 
-```{r fig-o2-temp-energy}
-p_o2_temp_energy <- panel_raster_contour(
-  surf_o2_temp,
-  x = "T", y = "pO2", z = "E_net_norm",
-  title = "Available energy",
-  fill_lab = "E_avail / Cmax",
-  midpoint = 0
-) +
-  facet_grid2(rows = vars(mass_lab), cols = vars(f_lab), independent = "none") +
-  labs(x = "Temperature (°C)", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
+  rr <- purrr::map2_dfr(mass_seq, B_vec, function(m, B) {
+    st <- find_U_opt(pO2_env = pO2, T = T, m = m, prey = B, tr = tr, U_lo = 1e-5, U_mech = 5)
+    tibble(
+      mass = m,
+      Cmax = st$Cmax,
+      Maintenance = st$M_m,
+      Activity = st$M_act,
+      SDA = st$D_SDA,
+      Assimilation = st$consump
+    )
+  })
 
-p_o2_temp_energy
-```
+  rr %>% mutate(T = T, pO2 = pO2, f_ref = f_ref)
+}) %>%
+  mutate(
+    scen = paste0("T=", T, "°C | pO2=", pO2, " kPa | f=", sprintf("%.1f", f_ref))
+  ) %>%
+  pivot_longer(cols = c(Maintenance, Activity, SDA, Assimilation), names_to = "Process", values_to = "value") %>%
+  mutate(value_norm = value / Cmax)
 
-```{r fig-o2-temp-limitations}
-p_o2_temp_g <- panel_raster_seq(
-  surf_o2_temp,
-  x = "T", y = "pO2", z = "g",
-  title = "Oxygen throttling fraction",
-  fill_lab = "g = C_real/C_pot"
-) +
-  facet_grid2(rows = vars(mass_lab), cols = vars(f_lab), independent = "none") +
-  labs(x = "Temperature (°C)", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
+alloc_palette <- c(
+  Maintenance = "#b2182b",
+  Activity = "#ef8a62",
+  SDA = "#fddbc7",
+  Assimilation = "#2166ac"
+)
 
-p_o2_temp_f <- panel_raster_seq(
-  surf_o2_temp,
-  x = "T", y = "pO2", z = "f",
-  title = "Feeding level",
-  fill_lab = "f = C_pot/Cmax"
-) +
-  facet_grid2(rows = vars(mass_lab), cols = vars(f_lab), independent = "none") +
-  labs(x = "Temperature (°C)", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
-
-p_o2_temp_regime <- ggplot(surf_o2_temp, aes(T, pO2, fill = regime)) +
-  geom_raster(interpolate = TRUE) +
-  facet_grid2(rows = vars(mass_lab), cols = vars(f_lab), independent = "none") +
-  scale_fill_manual(values = c(
-    "Prey limited" = "#4daf4a",
-    "Oxygen-limited processing" = "#377eb8",
-    "Co-limited" = "#984ea3",
-    "Energetic exclusion" = "#ff7f00",
-    "Oxygen exclusion" = "#e41a1c",
-    "Unclassified" = "grey70"
-  )) +
+ggplot(alloc_long, aes(x = mass, y = value_norm, fill = Process)) +
+  geom_area(position = "stack", alpha = 0.95, linewidth = 0.15, color = "white") +
+  scale_x_log10(labels = label_number()) +
+  scale_fill_manual(values = alloc_palette) +
+  facet_wrap(~scen, ncol = 2) +
   labs(
-    title = "Limitation regimes",
-    x = "Temperature (°C)",
-    y = expression("Oxygen,"~p[O[2]]~" (kPa)")
+    x = "Mass (g)",
+    y = "Metabolism / Cmax",
+    title = "Metabolic allocation (stacked, normalized by Cmax)"
   ) +
-  base_theme
-
-(p_o2_temp_g | p_o2_temp_f) / p_o2_temp_regime
-```
-
-## C) Metabolic allocation diagnostics (oxygen × food)
-
-```{r fig-metabolic-allocation-o2-food}
-# Choose one representative mass and temperature for process allocation diagnostics
-alloc_df <- surf_o2_food %>%
-  filter(mass == mass_pair[2], T == T_pair[1])
-
-plot_metabolic_allocation(alloc_df, x = "f_ref", y = "pO2") +
-  labs(
-    title = paste0("Metabolic allocation | ", label_mass(mass_pair[2]), ", T = ", T_pair[1], "°C"),
-    x = "Prey index",
-    y = expression("Oxygen,"~p[O[2]]~" (kPa)")
-  ) +
-  base_theme
-```
-
-## D) Process reference + limitation diagnostics (oxygen × food)
-
-```{r fig-process-reference}
-plot_process_reference(alloc_df, x = "f_ref", y = "pO2") +
-  labs(
-    title = paste0("Process diagnostics | ", label_mass(mass_pair[2]), ", T = ", T_pair[1], "°C"),
-    x = "Prey index",
-    y = expression("Oxygen,"~p[O[2]]~" (kPa)")
-  ) +
-  base_theme
+  base_theme +
+  square_theme
 ```
