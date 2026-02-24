@@ -195,27 +195,41 @@ B_from_f <- function(f_ref, m, tr,
                      enforce_O2_feasible = TRUE,
                      eps_f = 1e-8,
                      u_prey = 0, D = 3) {
-  Uref <- U_ref_from_mass(m)
-  Cmax_ref <- Cmax_whole(T_ref, m, tr)
+  n <- max(length(f_ref), length(m), length(T_ref), length(pO2_ref))
+  f_vec <- rep_len(f_ref, n)
+  m_vec <- rep_len(m, n)
+  T_vec <- rep_len(T_ref, n)
+  p_vec <- rep_len(pO2_ref, n)
+
   b_e <- get_par(tr, c("b_e"), required = TRUE)
   b_e_eff <- b_e * (D - 1) / 2
   a_e <- get_par(tr, c("a_e"), required = TRUE)
 
-  vapply(f_ref, function(f) {
-    if (!is.finite(f) || f <= 0) return(0)
+  out <- vapply(seq_len(n), function(i) {
+    f <- f_vec[[i]]
+    mi <- m_vec[[i]]
+    Ti <- T_vec[[i]]
+    pi <- p_vec[[i]]
+
+    if (!is.finite(f) || f <= 0 || !is.finite(mi) || mi <= 0) return(0)
+
     f_eff <- if (f >= 1) (1 - eps_f) else f
+    Uref <- U_ref_from_mass(mi)
+    Cmax_ref <- Cmax_whole(Ti, mi, tr)
     Enc_needed <- (f_eff / (1 - f_eff)) * Cmax_ref
 
     U_use <- Uref
     if (enforce_O2_feasible) {
-      U_cap <- cap_U_by_O2_idle(pO2_ref, T_ref, m, tr, U_lo = U_lo, U_mech = U_mech)
+      U_cap <- cap_U_by_O2_idle(pi, Ti, mi, tr, U_lo = U_lo, U_mech = U_mech)
       if (!is.finite(U_cap)) return(NA_real_)
       U_use <- min(Uref, U_cap)
     }
 
-    denom <- a_e * m^b_e_eff * v_rel_rms(U_use, u_prey = u_prey) / m
+    denom <- a_e * mi^b_e_eff * v_rel_rms(U_use, u_prey = u_prey) / mi
     pmax(Enc_needed / denom, 0)
   }, numeric(1))
+
+  out
 }
 
 B_from_powerlaw_spectrum <- function(m, intercept = 1.6, slope = -0.08, m0 = 1) {
