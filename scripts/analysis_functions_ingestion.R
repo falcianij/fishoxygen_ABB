@@ -87,7 +87,7 @@ compute_state_surface <- function(tr,
         U_opt = st$U_opt, E_net = st$E_net, Cmax = st$Cmax,
         Enc = st$Enc, C_pot = st$C_pot, C_real = st$C_real, I = st$I,
         f = st$f, g = st$g, pO2_int = st$pO2_int,
-        consump = st$consump, M_m = st$M_m, M_act = st$M_act, D_SDA = st$D_SDA,
+        consump = st$consump, A_assim = st$A_assim, M_m = st$M_m, M_act = st$M_act, D_SDA = st$D_SDA, M_exc = st$M_exc,
         O2_supply = st$O2_supply, O2_demand = st$O2_demand, O2_margin = st$O2_margin,
         oxygen_exclusion = as.numeric(st$oxygen_exclusion), energetic_exclusion = as.numeric(st$energetic_exclusion))
     })

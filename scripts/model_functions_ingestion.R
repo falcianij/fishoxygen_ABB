@@ -33,6 +33,16 @@ thermal_factor <- function(T, tr, E_name, Q10_name = NULL) {
   1
 }
 
+
+get_partition_fracs <- function(tr) {
+  a_sda <- get_par(tr, c("a_sda", "alpha"), default = 0.2)
+  a_exc <- get_par(tr, c("a_exc"), default = 0.1)
+  a_assim <- get_par(tr, c("a_assim", "eps", "epsAssim"), default = NA_real_)
+  if (!is.finite(a_assim)) a_assim <- 1 - a_sda - a_exc
+  a_assim <- pmax(a_assim, 0)
+  list(a_sda = a_sda, a_exc = a_exc, a_assim = a_assim)
+}
+
 v_rel_rms <- function(U, u_prey = 0) sqrt(U^2 + u_prey^2)
 U_ref_from_mass <- function(m) 10^(-0.55) * (m^(1 / 6))
 
@@ -97,7 +107,8 @@ hill_g <- function(p, K, h) {
 }
 
 solve_pO2_int <- function(U, pO2_env, T, m, prey, tr, u_prey = 0, D = 3) {
-  alpha <- get_par(tr, c("alpha"), default = 0)
+  fr <- get_partition_fracs(tr)
+  a_sda <- fr$a_sda
   K <- get_par(tr, c("K", "K_O2"), default = 2)
   h <- get_par(tr, c("h", "h_O2"), default = 2)
 
@@ -112,7 +123,7 @@ solve_pO2_int <- function(U, pO2_env, T, m, prey, tr, u_prey = 0, D = 3) {
 
   F <- function(p_int) {
     g <- hill_g(p_int, K = K, h = h)
-    kO * (pO2_env - p_int) - (Mm + Ma + alpha * g * C_pot)
+    kO * (pO2_env - p_int) - (Mm + Ma + a_sda * g * C_pot)
   }
 
   f0 <- F(0)
@@ -128,7 +139,7 @@ solve_pO2_int <- function(U, pO2_env, T, m, prey, tr, u_prey = 0, D = 3) {
   g <- hill_g(p_int, K = K, h = h)
   C_real <- g * C_pot
   O2_supply <- kO * (pO2_env - p_int)
-  O2_demand <- Mm + Ma + alpha * C_real
+  O2_demand <- Mm + Ma + a_sda * C_real
 
   list(feasible = TRUE, pO2_int = p_int, g = g,
        C_pot = C_pot, C_real = C_real, f = f,
@@ -138,10 +149,11 @@ solve_pO2_int <- function(U, pO2_env, T, m, prey, tr, u_prey = 0, D = 3) {
 }
 
 E_avail <- function(U, pO2_env, T, m, prey, tr, u_prey = 0, D = 3) {
-  eps <- get_par(tr, c("eps", "epsAssim"), default = 0.7)
+  fr <- get_partition_fracs(tr)
   st <- solve_pO2_int(U, pO2_env, T, m, prey, tr, u_prey = u_prey, D = D)
   if (!isTRUE(st$feasible)) return(NA_real_)
-  eps * st$C_real - (st$Mm + st$Ma)
+  A_assim <- fr$a_assim * st$C_real
+  A_assim - (st$Mm + st$Ma)
 }
 
 cap_U_by_O2_idle <- function(pO2_env, T, m, tr, U_lo = 1e-5, U_mech = 10) {
@@ -166,7 +178,8 @@ find_U_opt <- function(pO2_env, T, m, prey, tr, u_prey = 0, D = 3,
                 f = NA_real_, g = NA_real_, pO2_int = NA_real_,
                 consump = NA_real_, E_net = NA_real_, U_opt = NA_real_,
                 O2_supply = NA_real_, O2_demand = NA_real_, O2_margin = NA_real_,
-                oxygen_exclusion = TRUE, energetic_exclusion = NA, D_SDA = NA_real_))
+                oxygen_exclusion = TRUE, energetic_exclusion = NA, D_SDA = NA_real_,
+                M_exc = NA_real_, A_assim = NA_real_))
   }
 
   obj <- function(U) E_avail(U, pO2_env, T, m, prey, tr, u_prey = u_prey, D = D)
@@ -175,18 +188,21 @@ find_U_opt <- function(pO2_env, T, m, prey, tr, u_prey = 0, D = 3,
   st <- solve_pO2_int(Ustar, pO2_env, T, m, prey, tr, u_prey = u_prey, D = D)
 
   eps <- get_par(tr, c("eps", "epsAssim"), default = 0.7)
-  alpha <- get_par(tr, c("alpha"), default = 0)
+  fr <- get_partition_fracs(tr)
+  a_sda <- fr$a_sda
   Cassim <- eps * st$C_real
   E_net <- Cassim - (st$Mm + st$Ma)
 
   list(M_m = st$Mm, M_act = st$Ma, Cmax = st$Cmax, Enc = st$Enc,
        C_pot = st$C_pot, C_real = st$C_real, I = st$C_real,
        f = st$f, g = st$g, pO2_int = st$pO2_int,
-       consump = Cassim, E_net = E_net, U_opt = Ustar,
+       consump = A_assim, E_net = E_net, U_opt = Ustar,
        O2_supply = st$O2_supply, O2_demand = st$O2_demand, O2_margin = st$O2_margin,
        oxygen_exclusion = FALSE,
        energetic_exclusion = is.finite(E_net) && E_net <= 0,
-       D_SDA = alpha * st$C_real)
+       D_SDA = M_SDA,
+       M_exc = M_exc,
+       A_assim = A_assim
 }
 
 B_from_f <- function(f_ref, m, tr,
