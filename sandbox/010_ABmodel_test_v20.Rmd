@@ -205,8 +205,17 @@ plot_fg_bivariate(d_test, "f_ref", "pO2", x_limits = c(0,1), y_limits = c(0,30),
 d_prey <- compute_state_surface(tr, masses=c(1e0,1e4), Tseq=c(5,25), pO2seq=pO2seq,
                                 preys=seq(0,5,length.out=220), prey_units="biomass", pair_mode="cross", progress=TRUE) %>%
   add_masks() %>%
-  mutate(mass_lab=factor(mass, levels=c(1e0,1e4), labels=c("m = 1e0 g","m = 1e4 g")),
-         T_lab=factor(T, levels=c(5,25), labels=c("T = 5°C","T = 25°C")))
+  mutate(
+    mass_lab=factor(mass, levels=c(1e0,1e4), labels=c("m = 1e0 g","m = 1e4 g")),
+    T_lab=factor(T, levels=c(5,25), labels=c("T = 5°C","T = 25°C")),
+    M_total_aero = M_m + M_act + D_SDA,
+    kO_est = if_else(is.finite(O2_supply) & is.finite(pO2) & is.finite(pO2_int) & (pO2 > pO2_int),
+                     O2_supply / (pO2 - pO2_int), NA_real_),
+    phi_eff = if_else(is.finite(kO_est) & is.finite(M_total_aero) & M_total_aero > 0,
+                      kO_est * pO2 / M_total_aero, NA_real_),
+    FAL = if_else(is.finite(M_m) & M_m > 0 & is.finite(M_total_aero),
+                  M_total_aero / M_m, NA_real_)
+  )
 
 interp_prey <- function(z) d_prey  # keep raw dense grid for stability
 ```
@@ -233,6 +242,23 @@ plot_masked(interp_prey("U_opt"), "B_used", "pO2", "U_opt", "viridis", "U*", x_l
 plot_fg_bivariate(d_prey, "B_used", "pO2", x_limits = c(0, 5), y_limits = c(0,30), mask_df = d_prey) +
   facet_grid2(rows = vars(T_lab), cols = vars(mass_lab)) +
   labs(title = "Bivariate limitation mix (contour f = g)", x = "Prey biomass density", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
+```
+
+
+```{r prey-phi-eff}
+plot_masked(interp_prey("phi_eff"), "B_used", "pO2", "phi_eff", "purple", expression(phi[eff]),
+            x_limits = c(0, 5), y_limits = c(0,30), mask_df = d_prey) +
+  facet_grid2(rows = vars(T_lab), cols = vars(mass_lab)) +
+  labs(title = expression("Supplemental:"~phi[eff]~"= k"[O]*p[O[2]]/(M[M]+M[A]+M[SDA])),
+       x = "Prey biomass density", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
+```
+
+```{r prey-fal}
+plot_masked(interp_prey("FAL"), "B_used", "pO2", "FAL", "red", "FAL",
+            x_limits = c(0, 5), y_limits = c(0,30), mask_df = d_prey) +
+  facet_grid2(rows = vars(T_lab), cols = vars(mass_lab)) +
+  labs(title = expression("Supplemental: FAL = (M"[M]*"+M"[A]*"+M"[SDA]*")/M"[M]),
+       x = "Prey biomass density", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
 ```
 
 ## 3) pO2 vs temperature (four separate 4-panel plots)
