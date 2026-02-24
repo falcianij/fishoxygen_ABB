@@ -104,50 +104,44 @@ plot_masked <- function(df, x, y, z, palette = c("blue", "viridis", "green", "pu
     filter(!excl_o2, !excl_e) %>%
     mutate(.zval = .data[[z]])
 
-  val_nan <- val_df %>% filter(!is.finite(.zval))
+  val_na  <- val_df %>% filter(!is.finite(.zval) | is.na(.zval))
   val_neg <- val_df %>% filter(is.finite(.zval) & .zval < 0)
   val_pos <- val_df %>% filter(is.finite(.zval) & .zval >= 0)
 
-  p <- ggplot(df, aes(x = .data[[x]], y = .data[[y]])) +
-    geom_raster(data = val_nan, fill = "black", interpolate = TRUE) +
-    geom_raster(data = val_neg, fill = "grey50", interpolate = TRUE) +
-    geom_raster(data = val_pos, aes(fill = .zval), interpolate = TRUE)
+  p <- ggplot() +
+    geom_raster(data = val_na,  aes(.data[[x]], .data[[y]]), fill = "grey60", interpolate = TRUE) +
+    geom_raster(data = val_neg, aes(.data[[x]], .data[[y]]), fill = "grey60", interpolate = TRUE) +
+    geom_raster(data = val_pos, aes(.data[[x]], .data[[y]], fill = .zval), interpolate = TRUE)
 
-  if (identical(z, "f")) {
+  if (identical(z, "f") || identical(z, "g")) {
     p <- p + geom_contour(
-      data = df %>% filter(!excl_o2, !excl_e), aes(z = .data[[z]]),
+      data = val_pos, aes(.data[[x]], .data[[y]], z = .zval),
       breaks = seq(0, 1, by = 0.2), linetype = "dashed", linewidth = 0.25,
-      colour = "#238b45", alpha = 0.9
-    )
-  } else if (identical(z, "g")) {
-    p <- p + geom_contour(
-      data = df %>% filter(!excl_o2, !excl_e), aes(z = .data[[z]]),
-      breaks = seq(0, 1, by = 0.2), linetype = "dashed", linewidth = 0.25,
-      colour = "#6a51a3", alpha = 0.9
+      colour = "black", alpha = 0.9
     )
   } else if (identical(z, "E_net_norm")) {
     p <- p + geom_contour(
-      data = df %>% filter(!excl_o2, !excl_e), aes(z = .data[[z]]),
-      breaks = seq(-1, 1, by = 0.1), linetype = "dashed", linewidth = 0.25,
-      colour = "black", alpha = 0.7
+      data = val_pos, aes(.data[[x]], .data[[y]], z = .zval),
+      breaks = seq(0, 1, by = 0.1), linetype = "dashed", linewidth = 0.25,
+      colour = "black", alpha = 0.9
     )
   } else {
     p <- p + geom_contour(
-      data = df %>% filter(!excl_o2, !excl_e), aes(z = .data[[z]]),
+      data = val_pos, aes(.data[[x]], .data[[y]], z = .zval),
       bins = contour_n, linetype = "dashed", linewidth = 0.25,
       colour = "black", alpha = 0.7
     )
   }
 
   p <- p +
-    geom_raster(data = mask_plot %>% filter(excl_e), fill = "grey70", interpolate = TRUE) +
-    geom_raster(data = mask_plot %>% filter(excl_o2), fill = "black", interpolate = TRUE)
+    geom_raster(data = mask_plot %>% filter(excl_e), aes(.data[[x]], .data[[y]]), fill = "grey70", interpolate = TRUE) +
+    geom_raster(data = mask_plot %>% filter(excl_o2), aes(.data[[x]], .data[[y]]), fill = "black", interpolate = TRUE)
 
-  if (palette == "blue") p <- p + scale_fill_gradient(low = "#f7fbff", high = "#2171b5", name = fill_title, limits = limits, oob = squish, guide = guide_clean())
-  if (palette == "viridis") p <- p + scale_fill_viridis_c(option = "D", name = fill_title, limits = limits, oob = squish, guide = guide_clean())
-  if (palette == "green") p <- p + scale_fill_gradient(low = "#f7fcf5", high = "#238b45", name = fill_title, limits = limits, oob = squish, guide = guide_clean())
-  if (palette == "purple") p <- p + scale_fill_gradient(low = "#fcfbfd", high = "#6a51a3", name = fill_title, limits = limits, oob = squish, guide = guide_clean())
-  if (palette == "red") p <- p + scale_fill_gradient(low = "#fff5f0", high = "#cb181d", name = fill_title, limits = limits, oob = squish, guide = guide_clean())
+  if (palette == "blue") p <- p + scale_fill_gradient(low = "white", high = "#67A5CA", name = fill_title, limits = limits, oob = squish, na.value = "grey60", guide = guide_clean())
+  if (palette == "viridis") p <- p + scale_fill_viridis_c(option = "D", name = fill_title, limits = limits, oob = squish, na.value = "grey60", guide = guide_clean())
+  if (palette == "green") p <- p + scale_fill_gradient(low = "white", high = "#238b45", name = fill_title, limits = limits, oob = squish, na.value = "grey60", guide = guide_clean())
+  if (palette == "purple") p <- p + scale_fill_gradient(low = "white", high = "#6a51a3", name = fill_title, limits = limits, oob = squish, na.value = "grey60", guide = guide_clean())
+  if (palette == "red") p <- p + scale_fill_gradient(low = "white", high = "#cb181d", name = fill_title, limits = limits, oob = squish, na.value = "grey60", guide = guide_clean())
 
   if (x_trans == "log10") {
     p <- p + scale_x_log10(expand = c(0, 0), limits = x_limits, labels = label_scientific())
@@ -161,13 +155,13 @@ plot_masked <- function(df, x, y, z, palette = c("blue", "viridis", "green", "pu
 }
 
 
+
 plot_fg_bivariate <- function(df, x, y, x_limits = NULL, y_limits = NULL, x_trans = c("identity", "log10"),
                               mask_df = NULL, contour_n = 5) {
   x_trans <- match.arg(x_trans)
   if (is.null(mask_df)) mask_df <- df
   if (!all(c("f", "g") %in% names(df))) {
     if (!is.null(mask_df) && all(c("f", "g", x, y) %in% names(mask_df)) && all(c(x, y) %in% names(df))) {
-      keep <- unique(c(x, y, setdiff(names(df), c("f", "g")), "f", "g"))
       df <- dplyr::left_join(df, mask_df[, unique(c(x, y, "f", "g")), drop = FALSE], by = c(x, y), suffix = c("", ".m"))
       if (!"f" %in% names(df) && "f.m" %in% names(df)) df$f <- df$`f.m`
       if (!"g" %in% names(df) && "g.m" %in% names(df)) df$g <- df$`g.m`
@@ -184,29 +178,28 @@ plot_fg_bivariate <- function(df, x, y, x_limits = NULL, y_limits = NULL, x_tran
       fg_eq = f - g,
       prey_lim = 1 - f,
       oxy_lim = 1 - g,
-      # Dark at strong limitation (low f or low g), light at weak limitation
       r_ch = pmin(pmax(1 - (0.86 * prey_lim + 0.58 * oxy_lim), 0), 1),
       g_ch = pmin(pmax(1 - (0.26 * prey_lim + 0.81 * oxy_lim), 0), 1),
       b_ch = pmin(pmax(1 - (0.86 * prey_lim + 0.30 * oxy_lim), 0), 1),
-      # rgb() cannot accept NA intensities; set NA cells to white and mask them later
-      fg_col = rgb(
-        red   = replace_na(r_ch, 1),
-        green = replace_na(g_ch, 1),
-        blue  = replace_na(b_ch, 1)
-      )
+      fg_col = rgb(red = replace_na(r_ch, 1), green = replace_na(g_ch, 1), blue = replace_na(b_ch, 1))
     )
 
-  dd_valid <- dd %>% filter(!excl_o2, !excl_e & is.finite(f) & is.finite(g))
-  dd_bad <- dd %>% filter(!excl_o2, !excl_e & (!is.finite(f) | !is.finite(g)))
+  dd_val <- dd %>% filter(!excl_o2, !excl_e)
+  dd_na <- dd_val %>% filter(!is.finite(f) | !is.finite(g))
+  dd_ok <- dd_val %>% filter(is.finite(f) & is.finite(g))
 
-  p <- ggplot(dd, aes(x = .data[[x]], y = .data[[y]])) +
-    geom_raster(data = dd_bad, fill = "black", interpolate = TRUE) +
-    geom_raster(data = dd_valid, aes(fill = fg_col), interpolate = TRUE) +
+  p <- ggplot() +
+    geom_raster(data = dd_na, aes(.data[[x]], .data[[y]]), fill = "grey60", interpolate = TRUE) +
+    geom_raster(data = dd_ok, aes(.data[[x]], .data[[y]], fill = fg_col), interpolate = TRUE) +
     scale_fill_identity(name = "Limitation mix", guide = "none") +
-    geom_contour(data = dd %>% filter(!excl_o2, !excl_e), aes(z = fg_eq), breaks = 0,
-                 colour = "black", linewidth = 0.45) +
-    geom_raster(data = mask_df %>% filter(excl_e), fill = "grey70", interpolate = TRUE) +
-    geom_raster(data = mask_df %>% filter(excl_o2), fill = "black", interpolate = TRUE)
+    geom_contour(data = dd_ok, aes(.data[[x]], .data[[y]], z = f), breaks = seq(0, 1, by = 0.2),
+                 colour = "#238b45", linewidth = 0.25, linetype = "dashed", alpha = 0.9) +
+    geom_contour(data = dd_ok, aes(.data[[x]], .data[[y]], z = g), breaks = seq(0, 1, by = 0.2),
+                 colour = "#6a51a3", linewidth = 0.25, linetype = "dashed", alpha = 0.9) +
+    geom_contour(data = dd_ok, aes(.data[[x]], .data[[y]], z = fg_eq), breaks = 0,
+                 colour = "black", linewidth = 0.35) +
+    geom_raster(data = mask_df %>% filter(excl_e), aes(.data[[x]], .data[[y]]), fill = "grey70", interpolate = TRUE) +
+    geom_raster(data = mask_df %>% filter(excl_o2), aes(.data[[x]], .data[[y]]), fill = "black", interpolate = TRUE)
 
   if (x_trans == "log10") {
     p <- p + scale_x_log10(expand = c(0, 0), limits = x_limits, labels = label_scientific())
@@ -216,6 +209,7 @@ plot_fg_bivariate <- function(df, x, y, x_limits = NULL, y_limits = NULL, x_tran
 
   p + scale_y_continuous(expand = c(0, 0), limits = y_limits) + base_theme + square_theme
 }
+
 
 tr <- list(
   a_a = 80, b_R = 0.85,
