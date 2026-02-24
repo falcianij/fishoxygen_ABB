@@ -114,9 +114,12 @@ plot_fg_bivariate <- function(df, x, y, x_limits = NULL, y_limits = NULL, x_tran
       f = if_else(is.finite(f), pmin(pmax(f, 0), 1), NA_real_),
       g = if_else(is.finite(g), pmin(pmax(g, 0), 1), NA_real_),
       fg_eq = f - g,
-      r_ch = pmin(pmax(0.42 * (1 - g) + 0.14 * (1 - f), 0), 1),
-      g_ch = pmin(pmax(0.54 * (1 - f) + 0.32 * (1 - g), 0), 1),
-      b_ch = pmin(pmax(0.63 * (1 - g) + 0.20 * (1 - f), 0), 1),
+      prey_lim = 1 - f,
+      oxy_lim = 1 - g,
+      # Dark at strong limitation (low f or low g), light at weak limitation
+      r_ch = pmin(pmax(1 - (0.86 * prey_lim + 0.58 * oxy_lim), 0), 1),
+      g_ch = pmin(pmax(1 - (0.26 * prey_lim + 0.81 * oxy_lim), 0), 1),
+      b_ch = pmin(pmax(1 - (0.86 * prey_lim + 0.30 * oxy_lim), 0), 1),
       # rgb() cannot accept NA intensities; set NA cells to white and mask them later
       fg_col = rgb(
         red   = replace_na(r_ch, 1),
