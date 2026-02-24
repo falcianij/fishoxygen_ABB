@@ -48,7 +48,16 @@ add_masks <- function(df) {
   )
 }
 
-interp_surface <- function(df, x, y, z, facet_cols = character(0), nx = 240, ny = 240) {
+interp_surface <- function(df, x, y, z, facet_cols = character(0), nx = 140, ny = 140) {
+  if (length(facet_cols) == 0) {
+    dd_valid <- df %>% filter(!excl_o2, !excl_e, is.finite(.data[[z]]), is.finite(.data[[x]]), is.finite(.data[[y]]))
+    if (nrow(dd_valid) < 5) return(df)
+    ip <- interp_to_grid(dd_valid, xcol = x, ycol = y, zcol = z, nx = nx, ny = ny)
+    ip$excl_o2 <- FALSE
+    ip$excl_e <- FALSE
+    return(ip)
+  }
+
   split_df <- split(df, interaction(df[, facet_cols, drop = FALSE], drop = TRUE))
   purrr::imap_dfr(split_df, function(dd, nm) {
     dd_valid <- dd %>% filter(!excl_o2, !excl_e, is.finite(.data[[z]]), is.finite(.data[[x]]), is.finite(.data[[y]]))
@@ -114,7 +123,7 @@ d_test <- compute_state_surface(tr, masses = 1e4, Tseq = 5, pO2seq = pO2seq,
   mutate(M_m_norm = M_m/Cmax, M_act_norm = M_act/Cmax, D_SDA_norm = D_SDA/Cmax,
          M_exc_norm = M_exc/Cmax, A_assim_norm = A_assim/Cmax)
 
-diag_interp <- function(z) interp_surface(d_test, "f_ref", "pO2", z)
+diag_interp <- function(z) interp_surface(d_test, "f_ref", "pO2", z, nx = 140, ny = 140)
 ```
 
 ```{r test-plots}
@@ -139,7 +148,7 @@ d_prey <- compute_state_surface(tr, masses=c(1e0,1e4), Tseq=c(5,25), pO2seq=pO2s
   mutate(mass_lab=factor(mass, levels=c(1e0,1e4), labels=c("m = 1e0 g","m = 1e4 g")),
          T_lab=factor(T, levels=c(5,25), labels=c("T = 5°C","T = 25°C")))
 
-interp_prey <- function(z) interp_surface(d_prey, "B_used", "pO2", z, facet_cols = c("mass_lab","T_lab"))
+interp_prey <- function(z) interp_surface(d_prey, "B_used", "pO2", z, facet_cols = c("mass_lab","T_lab"), nx = 110, ny = 110)
 ```
 
 ```{r prey-E}
@@ -174,7 +183,7 @@ d_temp <- compute_state_surface(tr, masses=c(1e0,1e4), Tseq=seq(0,40,by=0.25), p
   mutate(mass_lab=factor(mass, levels=c(1e0,1e4), labels=c("m = 1e0 g","m = 1e4 g")),
          f_lab=factor(f_ref, levels=c(0.9,0.6), labels=c("prey index = 0.9","prey index = 0.6")))
 
-interp_temp <- function(z) interp_surface(d_temp, "T", "pO2", z, facet_cols = c("mass_lab","f_lab"))
+interp_temp <- function(z) interp_surface(d_temp, "T", "pO2", z, facet_cols = c("mass_lab","f_lab"), nx = 120, ny = 120)
 ```
 
 ```{r temp-E}
