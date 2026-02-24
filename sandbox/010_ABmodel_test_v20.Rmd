@@ -100,6 +100,36 @@ plot_masked <- function(df, x, y, z, palette = c("blue", "viridis", "green", "pu
     base_theme + square_theme
 }
 
+
+plot_fg_bivariate <- function(df, x, y, x_limits = NULL, y_limits = NULL, x_trans = c("identity", "log10"),
+                              mask_df = NULL, contour_n = 5) {
+  x_trans <- match.arg(x_trans)
+  if (is.null(mask_df)) mask_df <- df
+
+  dd <- df %>% mutate(fg_diff = f - g)
+
+  p <- ggplot(dd, aes(x = .data[[x]], y = .data[[y]])) +
+    geom_raster(data = dd %>% filter(!excl_o2, !excl_e), aes(fill = fg_diff), interpolate = TRUE) +
+    scale_fill_gradient2(low = "#6a51a3", mid = "white", high = "#238b45", midpoint = 0,
+                         name = "f - g", guide = guide_clean()) +
+    geom_contour(data = dd %>% filter(!excl_o2, !excl_e), aes(z = f), bins = contour_n,
+                 colour = "#238b45", linewidth = 0.25, linetype = "dashed", alpha = 0.9) +
+    geom_contour(data = dd %>% filter(!excl_o2, !excl_e), aes(z = g), bins = contour_n,
+                 colour = "#6a51a3", linewidth = 0.25, linetype = "dashed", alpha = 0.9) +
+    geom_contour(data = dd %>% filter(!excl_o2, !excl_e), aes(z = fg_diff), breaks = 0,
+                 colour = "black", linewidth = 0.35) +
+    geom_raster(data = mask_df %>% filter(excl_e), fill = "grey70", interpolate = FALSE) +
+    geom_raster(data = mask_df %>% filter(excl_o2), fill = "black", interpolate = FALSE)
+
+  if (x_trans == "log10") {
+    p <- p + scale_x_log10(expand = c(0, 0), limits = x_limits, labels = label_scientific())
+  } else {
+    p <- p + scale_x_continuous(expand = c(0, 0), limits = x_limits)
+  }
+
+  p + scale_y_continuous(expand = c(0, 0), limits = y_limits) + base_theme + square_theme
+}
+
 tr <- list(
   a_a = 80, b_R = 0.85,
   a_g = 3, hm = 1,
@@ -141,6 +171,11 @@ plot_masked(diag_interp("A_assim_norm"), "f_ref", "pO2", "A_assim_norm", "blue",
 plot_masked(diag_interp("pO2_int"), "f_ref", "pO2", "pO2_int", "purple", expression(p[O[2]]^{int}), x_limits = c(0,1), y_limits = c(0,30), mask_df = d_test) + labs(title="Internal oxygen", x="Prey index", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
 ```
 
+```{r test-fg-bivariate}
+plot_fg_bivariate(diag_interp("f"), "f_ref", "pO2", x_limits = c(0,1), y_limits = c(0,30), mask_df = d_test) +
+  labs(title = "Bivariate limitation (f green, g purple; contour f = g)", x = "Prey index", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
+```
+
 ## 2) pO2 vs prey density (four separate 4-panel plots)
 
 ```{r prey-data}
@@ -166,14 +201,15 @@ plot_masked(interp_prey("g"), "B_used", "pO2", "g", "purple", "g", limits=c(0,1)
 ```
 
 ```{r prey-u}
-# two column-specific legends for cruising speed
-u_m1 <- d_prey %>% filter(mass == 1e0) %>% interp_surface("B_used", "pO2", "U_opt", facet_cols = c("T_lab"))
-u_m2 <- d_prey %>% filter(mass == 1e4) %>% interp_surface("B_used", "pO2", "U_opt", facet_cols = c("T_lab"))
+plot_masked(interp_prey("U_opt"), "B_used", "pO2", "U_opt", "viridis", "U*", x_limits = c(1e-3, 1e4), y_limits = c(0,30), mask_df = d_prey) +
+  facet_grid2(rows=vars(T_lab), cols=vars(mass_lab)) +
+  labs(title="Cruising speed", x="Prey biomass density", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
+```
 
-p_u_m1 <- plot_masked(u_m1, "B_used", "pO2", "U_opt", "viridis", "U* (m=1e0)", x_limits = c(1e-3, 1e4), y_limits = c(0,30) , mask_df = d_prey %>% filter(mass == 1e0)) + facet_grid2(rows=vars(T_lab), cols=vars()) + labs(title="Cruising speed", x="Prey biomass density", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
-p_u_m2 <- plot_masked(u_m2, "B_used", "pO2", "U_opt", "viridis", "U* (m=1e4)", x_limits = c(1e-3, 1e4), y_limits = c(0,30) , mask_df = d_prey %>% filter(mass == 1e4)) + facet_grid2(rows=vars(T_lab), cols=vars()) + labs(title="Cruising speed", x="Prey biomass density", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
-
-p_u_m1 | p_u_m2
+```{r prey-fg-bivariate}
+plot_fg_bivariate(interp_prey("f"), "B_used", "pO2", x_limits = c(1e-3, 1e4), y_limits = c(0,30), mask_df = d_prey) +
+  facet_grid2(rows = vars(T_lab), cols = vars(mass_lab)) +
+  labs(title = "Bivariate limitation (f vs g)", x = "Prey biomass density", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
 ```
 
 ## 3) pO2 vs temperature (four separate 4-panel plots)
@@ -201,13 +237,15 @@ plot_masked(interp_temp("g"), "T", "pO2", "g", "purple", "g", limits=c(0,1), x_l
 ```
 
 ```{r temp-u}
-uT_m1 <- d_temp %>% filter(mass == 1e0) %>% interp_surface("T", "pO2", "U_opt", facet_cols = c("f_lab"))
-uT_m2 <- d_temp %>% filter(mass == 1e4) %>% interp_surface("T", "pO2", "U_opt", facet_cols = c("f_lab"))
+plot_masked(interp_temp("U_opt"), "T", "pO2", "U_opt", "viridis", "U*", x_limits = c(0,40), y_limits = c(0,30), mask_df = d_temp) +
+  facet_grid2(rows=vars(f_lab), cols=vars(mass_lab)) +
+  labs(title="Cruising speed", x="Temperature (°C)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
+```
 
-p_uT_m1 <- plot_masked(uT_m1, "T", "pO2", "U_opt", "viridis", "U* (m=1e0)", x_limits = c(0,40), y_limits = c(0,30), mask_df = d_temp %>% filter(mass == 1e0)) + facet_grid2(rows=vars(f_lab), cols=vars()) + labs(title="Cruising speed", x="Temperature (°C)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
-p_uT_m2 <- plot_masked(uT_m2, "T", "pO2", "U_opt", "viridis", "U* (m=1e4)", x_limits = c(0,40), y_limits = c(0,30), mask_df = d_temp %>% filter(mass == 1e4)) + facet_grid2(rows=vars(f_lab), cols=vars()) + labs(title="Cruising speed", x="Temperature (°C)", y=expression("Oxygen,"~p[O[2]]~" (kPa)"))
-
-p_uT_m1 | p_uT_m2
+```{r temp-fg-bivariate}
+plot_fg_bivariate(interp_temp("f"), "T", "pO2", x_limits = c(0,40), y_limits = c(0,30), mask_df = d_temp) +
+  facet_grid2(rows = vars(f_lab), cols = vars(mass_lab)) +
+  labs(title = "Bivariate limitation (f vs g)", x = "Temperature (°C)", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
 ```
 
 ## 4) Metabolic allocation (stacked; explicit excretion)
