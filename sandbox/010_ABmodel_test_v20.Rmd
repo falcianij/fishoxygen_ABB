@@ -111,15 +111,18 @@ plot_fg_bivariate <- function(df, x, y, x_limits = NULL, y_limits = NULL, x_tran
 
   dd <- df %>%
     mutate(
-      f = pmin(pmax(f, 0), 1),
-      g = pmin(pmax(g, 0), 1),
-      # Color mix: prey limitation (low f) -> green, oxygen limitation (low g) -> purple
+      f = if_else(is.finite(f), pmin(pmax(f, 0), 1), NA_real_),
+      g = if_else(is.finite(g), pmin(pmax(g, 0), 1), NA_real_),
+      fg_eq = f - g,
+      r_ch = pmin(pmax(0.42 * (1 - g) + 0.14 * (1 - f), 0), 1),
+      g_ch = pmin(pmax(0.54 * (1 - f) + 0.32 * (1 - g), 0), 1),
+      b_ch = pmin(pmax(0.63 * (1 - g) + 0.20 * (1 - f), 0), 1),
+      # rgb() cannot accept NA intensities; set NA cells to white and mask them later
       fg_col = rgb(
-        red   = 0.42 * (1 - g) + 0.14 * (1 - f),
-        green = 0.54 * (1 - f) + 0.32 * (1 - g),
-        blue  = 0.63 * (1 - g) + 0.20 * (1 - f)
-      ),
-      fg_eq = f - g
+        red   = replace_na(r_ch, 1),
+        green = replace_na(g_ch, 1),
+        blue  = replace_na(b_ch, 1)
+      )
     )
 
   p <- ggplot(dd, aes(x = .data[[x]], y = .data[[y]])) +
