@@ -136,10 +136,25 @@ add_regime_labels_ingestion <- function(df,
 interp_to_grid <- function(df, xcol, ycol, zcol, nx = 500, ny = 500) {
   x <- df[[xcol]]; y <- df[[ycol]]; z <- df[[zcol]]
   ok <- is.finite(x) & is.finite(y) & is.finite(z)
+
+  if (sum(ok) < 3) {
+    out <- df[ok, c(xcol, ycol, zcol), drop = FALSE]
+    return(out)
+  }
+
   xo <- seq(min(x[ok]), max(x[ok]), length.out = nx)
   yo <- seq(min(y[ok]), max(y[ok]), length.out = ny)
+
   ip <- interp::interp(x[ok], y[ok], z[ok], xo = xo, yo = yo, linear = TRUE, extrap = FALSE)
-  out <- expand.grid(stats::setNames(list(ip$x, ip$y), c(xcol, ycol)))
-  out[[zcol]] <- as.vector(ip$z)
+
+  # Build output grid from requested axes to avoid NULL/length edge cases in ip$x/ip$y
+  out <- expand.grid(stats::setNames(list(xo, yo), c(xcol, ycol)))
+
+  zvec <- as.vector(ip$z)
+  if (length(zvec) != nrow(out)) {
+    zvec <- rep_len(zvec, nrow(out))
+  }
+
+  out[[zcol]] <- zvec
   out
 }
