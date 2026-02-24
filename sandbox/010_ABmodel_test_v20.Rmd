@@ -106,6 +106,14 @@ plot_fg_bivariate <- function(df, x, y, x_limits = NULL, y_limits = NULL, x_tran
   x_trans <- match.arg(x_trans)
   if (is.null(mask_df)) mask_df <- df
   if (!all(c("f", "g") %in% names(df))) {
+    if (!is.null(mask_df) && all(c("f", "g", x, y) %in% names(mask_df)) && all(c(x, y) %in% names(df))) {
+      keep <- unique(c(x, y, setdiff(names(df), c("f", "g")), "f", "g"))
+      df <- dplyr::left_join(df, mask_df[, unique(c(x, y, "f", "g")), drop = FALSE], by = c(x, y), suffix = c("", ".m"))
+      if (!"f" %in% names(df) && "f.m" %in% names(df)) df$f <- df$`f.m`
+      if (!"g" %in% names(df) && "g.m" %in% names(df)) df$g <- df$`g.m`
+    }
+  }
+  if (!all(c("f", "g") %in% names(df))) {
     stop("plot_fg_bivariate() requires both 'f' and 'g' columns in 'df'.")
   }
 
@@ -222,7 +230,7 @@ plot_masked(interp_prey("U_opt"), "B_used", "pO2", "U_opt", "viridis", "U*", x_l
 ```
 
 ```{r prey-fg-bivariate}
-plot_fg_bivariate(interp_prey("f"), "B_used", "pO2", x_limits = c(0, 5), y_limits = c(0,30), mask_df = d_prey) +
+plot_fg_bivariate(d_prey, "B_used", "pO2", x_limits = c(0, 5), y_limits = c(0,30), mask_df = d_prey) +
   facet_grid2(rows = vars(T_lab), cols = vars(mass_lab)) +
   labs(title = "Bivariate limitation mix (contour f = g)", x = "Prey biomass density", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
 ```
@@ -258,7 +266,7 @@ plot_masked(interp_temp("U_opt"), "T", "pO2", "U_opt", "viridis", "U*", x_limits
 ```
 
 ```{r temp-fg-bivariate}
-plot_fg_bivariate(interp_temp("f"), "T", "pO2", x_limits = c(0,40), y_limits = c(0,30), mask_df = d_temp) +
+plot_fg_bivariate(d_temp, "T", "pO2", x_limits = c(0,40), y_limits = c(0,30), mask_df = d_temp) +
   facet_grid2(rows = vars(f_lab), cols = vars(mass_lab)) +
   labs(title = "Bivariate limitation mix (contour f = g)", x = "Temperature (°C)", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
 ```
