@@ -70,12 +70,35 @@ interp_surface <- function(df, x, y, z, facet_cols = character(0), nx = 300, ny 
   })
 }
 
+
+
+build_mask_surface <- function(mask_df, x, y, nx = 300, ny = 300) {
+  md <- mask_df %>%
+    mutate(
+      excl_e_num = as.numeric(excl_e),
+      excl_o2_num = as.numeric(excl_o2)
+    )
+
+  e_s <- interp_to_grid(md, xcol = x, ycol = y, zcol = "excl_e_num", nx = nx, ny = ny)
+  o_s <- interp_to_grid(md, xcol = x, ycol = y, zcol = "excl_o2_num", nx = nx, ny = ny)
+
+  out <- dplyr::left_join(e_s, o_s, by = c(x, y)) %>%
+    mutate(
+      excl_e = is.finite(excl_e_num) & excl_e_num >= 0.5,
+      excl_o2 = is.finite(excl_o2_num) & excl_o2_num >= 0.5
+    )
+
+  out
+}
 plot_masked <- function(df, x, y, z, palette = c("blue", "viridis", "green", "purple", "red"),
                         fill_title = "", limits = NULL, x_limits = NULL, y_limits = NULL,
-                        x_trans = c("identity", "log10"), contour_n = 5, mask_df = NULL) {
+                        x_trans = c("identity", "log10"), contour_n = 5, mask_df = NULL,
+                        smooth_mask = TRUE, mask_nx = 300, mask_ny = 300) {
   palette <- match.arg(palette)
   x_trans <- match.arg(x_trans)
   if (is.null(mask_df)) mask_df <- df
+
+  mask_plot <- if (isTRUE(smooth_mask)) build_mask_surface(mask_df, x = x, y = y, nx = mask_nx, ny = mask_ny) else mask_df
 
   p <- ggplot(df, aes(x = .data[[x]], y = .data[[y]])) +
     geom_raster(data = df %>% filter(!excl_o2, !excl_e), aes(fill = .data[[z]]), interpolate = TRUE)
@@ -107,8 +130,12 @@ plot_masked <- function(df, x, y, z, palette = c("blue", "viridis", "green", "pu
   }
 
   p <- p +
-    geom_raster(data = mask_df %>% filter(excl_e), fill = "grey70", interpolate = FALSE) +
-    geom_raster(data = mask_df %>% filter(excl_o2), fill = "black", interpolate = FALSE)
+    geom_raster(data = mask_plot %>% filter(excl_e), fill = "grey70", interpolate = TRUE) +
+    geom_raster(data = mask_plot %>% filter(excl_o2), fill = "black", interpolate = TRUE) +
+    geom_contour(data = mask_plot, aes(z = as.numeric(excl_e)), breaks = 0.5,
+                 colour = "grey60", linewidth = 0.35, alpha = 0.9) +
+    geom_contour(data = mask_plot, aes(z = as.numeric(excl_o2)), breaks = 0.5,
+                 colour = "grey80", linewidth = 0.35, alpha = 0.9)
 
   if (palette == "blue") p <- p + scale_fill_gradient(low = "#f7fbff", high = "#2171b5", name = fill_title, limits = limits, oob = squish, guide = guide_clean())
   if (palette == "viridis") p <- p + scale_fill_viridis_c(option = "D", name = fill_title, limits = limits, oob = squish, guide = guide_clean())
