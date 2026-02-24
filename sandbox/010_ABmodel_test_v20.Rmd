@@ -105,6 +105,9 @@ plot_fg_bivariate <- function(df, x, y, x_limits = NULL, y_limits = NULL, x_tran
                               mask_df = NULL, contour_n = 5) {
   x_trans <- match.arg(x_trans)
   if (is.null(mask_df)) mask_df <- df
+  if (!all(c("f", "g") %in% names(df))) {
+    stop("plot_fg_bivariate() requires both 'f' and 'g' columns in 'df'.")
+  }
 
   dd <- df %>% mutate(fg_diff = f - g)
 
@@ -172,7 +175,7 @@ plot_masked(diag_interp("pO2_int"), "f_ref", "pO2", "pO2_int", "purple", express
 ```
 
 ```{r test-fg-bivariate}
-plot_fg_bivariate(diag_interp("f"), "f_ref", "pO2", x_limits = c(0,1), y_limits = c(0,30), mask_df = d_test) +
+plot_fg_bivariate(d_test, "f_ref", "pO2", x_limits = c(0,1), y_limits = c(0,30), mask_df = d_test) +
   labs(title = "Bivariate limitation (f green, g purple; contour f = g)", x = "Prey index", y = expression("Oxygen,"~p[O[2]]~" (kPa)"))
 ```
 
