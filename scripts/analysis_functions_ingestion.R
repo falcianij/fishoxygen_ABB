@@ -145,7 +145,7 @@ interp_to_grid <- function(df, xcol, ycol, zcol, nx = 500, ny = 500) {
   xo <- seq(min(x[ok]), max(x[ok]), length.out = nx)
   yo <- seq(min(y[ok]), max(y[ok]), length.out = ny)
 
-  ip <- interp::interp(x[ok], y[ok], z[ok], xo = xo, yo = yo, linear = TRUE, extrap = FALSE)
+  ip <- interp::interp(x[ok], y[ok], z[ok], xo = xo, yo = yo, linear = TRUE, extrap = FALSE, duplicate = "mean")
 
   # Build output grid from requested axes to avoid NULL/length edge cases in ip$x/ip$y
   out <- expand.grid(stats::setNames(list(xo, yo), c(xcol, ycol)))
