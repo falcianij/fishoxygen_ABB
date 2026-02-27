@@ -1,6 +1,8 @@
 # scripts/analysis_functions_ingestion.R
 # -------------------------------------------------------------------
-# Analysis helpers for Rubalcaba-style internal O2 closure model.
+# Analysis helpers for internal O2 closure + behavioural optimization model.
+# Uses B_from_f() that inverts the FULL model (optimized U, O2 closure)
+# so that "prey_index" and "feeding_level" mean what you intended.
 # -------------------------------------------------------------------
 
 library(interp)
@@ -23,10 +25,10 @@ compute_state_surface <- function(tr,
                                   U_lo = 1e-5, U_mech = 5,
                                   enforce_O2_feasible = TRUE,
                                   u_prey = 0, D = 3) {
-
+  
   prey_units <- match.arg(prey_units)
   pair_mode <- match.arg(pair_mode)
-
+  
   make_spec_cross <- function() {
     if (prey_units %in% c("biomass", "prey_index", "feeding_level")) {
       tidyr::expand_grid(mass = masses, prey_arg = preys)
@@ -36,74 +38,163 @@ compute_state_surface <- function(tr,
   }
   make_spec_zip <- function() {
     if (prey_units %in% c("biomass", "prey_index", "feeding_level")) {
-      tibble::tibble(mass = rep_len(masses, max(length(masses), length(preys))),
-                     prey_arg = rep_len(preys, max(length(masses), length(preys))))
+      tibble::tibble(
+        mass = rep_len(masses, max(length(masses), length(preys))),
+        prey_arg = rep_len(preys,  max(length(masses), length(preys)))
+      )
     } else {
-      tibble::tibble(mass = rep_len(masses, max(length(masses), length(intercepts), length(slopes))),
-                     intercept = rep_len(intercepts, max(length(masses), length(intercepts), length(slopes))),
-                     slope = rep_len(slopes, max(length(masses), length(intercepts), length(slopes))))
+      tibble::tibble(
+        mass = rep_len(masses, max(length(masses), length(intercepts), length(slopes))),
+        intercept = rep_len(intercepts, max(length(masses), length(intercepts), length(slopes))),
+        slope = rep_len(slopes, max(length(masses), length(intercepts), length(slopes)))
+      )
     }
   }
-
-  if (pair_mode == "auto") pair_mode <- if (length(masses) > 1 && !is.null(preys) && length(preys) == length(masses)) "zip" else "cross"
+  
+  if (pair_mode == "auto") {
+    pair_mode <- if (length(masses) > 1 && !is.null(preys) && length(preys) == length(masses)) "zip" else "cross"
+  }
   spec <- if (pair_mode == "zip") make_spec_zip() else make_spec_cross()
-
-  resolve_B <- function(m, row, Tval = NULL) {
-    if (prey_units == "biomass") {
-      list(B = row$prey_arg, mode = "biomass", f_ref = NA_real_)
-    } else if (prey_units == "prey_index" || prey_units == "feeding_level") {
-      f_ref <- pmin(pmax(row$prey_arg, .Machine$double.eps), 1 - .Machine$double.eps)
-      T_use <- ifelse(is.null(Tval), T_ref, Tval)
-      B <- B_from_f(f_ref = f_ref, m = m, tr = tr,
-                    T_ref = T_use, pO2_ref = pO2_ref,
-                    U_lo = U_lo, U_mech = U_mech,
-                    enforce_O2_feasible = enforce_O2_feasible,
-                    u_prey = u_prey, D = D)
-      list(B = B, mode = prey_units, f_ref = row$prey_arg)
-    } else {
-      list(B = B_from_powerlaw_spectrum(m, row$intercept, row$slope, m0 = m0), mode = "powerlaw", f_ref = NA_real_)
-    }
+  
+  # ----------------------- caching for B_from_f -----------------------
+  # Cache keys include parameters that affect B_from_f results.
+  cache <- new.env(parent = emptyenv())
+  
+  key_pi <- function(m, f_ref) {
+    paste0("pi|m=", signif(m, 12),
+           "|f=", signif(f_ref, 12),
+           "|Tref=", signif(T_ref, 12),
+           "|pO2ref=", signif(pO2_ref, 12),
+           "|Ulo=", signif(U_lo, 12),
+           "|Umech=", signif(U_mech, 12),
+           "|enf=", enforce_O2_feasible,
+           "|uprey=", signif(u_prey, 12),
+           "|D=", D)
   }
-
+  key_fl <- function(m, f_ref, Tval) {
+    paste0("fl|m=", signif(m, 12),
+           "|f=", signif(f_ref, 12),
+           "|T=", signif(Tval, 12),
+           "|pO2ref=", signif(pO2_ref, 12),
+           "|Ulo=", signif(U_lo, 12),
+           "|Umech=", signif(U_mech, 12),
+           "|enf=", enforce_O2_feasible,
+           "|uprey=", signif(u_prey, 12),
+           "|D=", D)
+  }
+  
+  get_B_prey_index <- function(m, f_ref) {
+    k <- key_pi(m, f_ref)
+    if (exists(k, envir = cache, inherits = FALSE)) return(get(k, envir = cache, inherits = FALSE))
+    B <- B_from_f(f_ref = f_ref, m = m, tr = tr,
+                  T_ref = T_ref, pO2_ref = pO2_ref,
+                  U_lo = U_lo, U_mech = U_mech,
+                  enforce_O2_feasible = enforce_O2_feasible,
+                  u_prey = u_prey, D = D)
+    assign(k, B, envir = cache)
+    B
+  }
+  
+  get_B_feeding_level <- function(m, f_ref, Tval) {
+    k <- key_fl(m, f_ref, Tval)
+    if (exists(k, envir = cache, inherits = FALSE)) return(get(k, envir = cache, inherits = FALSE))
+    B <- B_from_f(f_ref = f_ref, m = m, tr = tr,
+                  T_ref = Tval, pO2_ref = pO2_ref,
+                  U_lo = U_lo, U_mech = U_mech,
+                  enforce_O2_feasible = enforce_O2_feasible,
+                  u_prey = u_prey, D = D)
+    assign(k, B, envir = cache)
+    B
+  }
+  
+  # ----------------------- progress bar -----------------------
   if (isTRUE(progress)) {
     pb <- utils::txtProgressBar(min = 0, max = nrow(spec), style = 3)
     on.exit(try(close(pb), silent = TRUE), add = TRUE)
   }
-
+  
   blocks <- vector("list", nrow(spec))
+  
   for (i in seq_len(nrow(spec))) {
     m <- spec$mass[i]
+    
+    # Build (T,pO2) grid once
     grid <- tidyr::expand_grid(T = Tseq, pO2 = pO2seq)
-
+    
+    # Precompute prey biomass B on the minimal needed axes
+    # (crucially: NEVER depends on pO2 for prey_index or feeding_level)
+    if (prey_units == "biomass") {
+      B_mode <- "biomass"
+      B_const <- spec$prey_arg[i]
+      f_ref_out <- NA_real_
+      # We'll use B_const for all grid rows
+      B_lookup <- NULL
+    } else if (prey_units %in% c("prey_index", "feeding_level")) {
+      B_mode <- prey_units
+      f_ref <- pmin(pmax(spec$prey_arg[i], .Machine$double.eps), 1 - .Machine$double.eps)
+      f_ref_out <- spec$prey_arg[i]
+      
+      if (prey_units == "prey_index") {
+        # cache once per (m, f_ref)
+        B_const <- get_B_prey_index(m, f_ref)
+        B_lookup <- NULL
+      } else {
+        # feeding_level: cache once per (m, f_ref, T)
+        # Precompute a vector aligned with Tseq so lookup is O(1)
+        B_vec <- vapply(Tseq, function(Tval) get_B_feeding_level(m, f_ref, Tval), numeric(1))
+        B_lookup <- B_vec
+        B_const <- NA_real_
+      }
+    } else {
+      B_mode <- "powerlaw"
+      B_const <- B_from_powerlaw_spectrum(m, spec$intercept[i], spec$slope[i], m0 = m0)
+      f_ref_out <- NA_real_
+      B_lookup <- NULL
+    }
+    
+    # Fast row-evaluator: only find_U_opt per grid point; no B_from_f inside.
     rr <- apply(as.matrix(grid), 1, function(row) {
       Tval <- as.numeric(row[[1]])
       pO2v <- as.numeric(row[[2]])
-      B_row <- resolve_B(m, spec[i, , drop = FALSE], Tval = if (prey_units == "feeding_level") Tval else NULL)
-
-      st <- find_U_opt(pO2_env = pO2v, T = Tval, m = m, prey = B_row$B, tr = tr,
+      
+      B_used <- if (B_mode == "feeding_level") {
+        # grid built from Tseq, so match should succeed
+        idx <- match(Tval, Tseq)
+        if (is.na(idx)) idx <- which.min(abs(Tseq - Tval))
+        B_lookup[[idx]]
+      } else {
+        B_const
+      }
+      
+      st <- find_U_opt(pO2_env = pO2v, T = Tval, m = m, prey = B_used, tr = tr,
                        u_prey = u_prey, D = D, U_lo = U_lo, U_mech = U_mech)
-
-      c(B_used = B_row$B, f_ref = B_row$f_ref,
+      
+      c(B_used = B_used, f_ref = f_ref_out,
         U_opt = st$U_opt, E_net = st$E_net, Cmax = st$Cmax,
         Enc = st$Enc, C_pot = st$C_pot, C_real = st$C_real, I = st$I,
         f = st$f, g = st$g, pO2_int = st$pO2_int,
-        consump = st$consump, A_assim = st$A_assim, M_m = st$M_m, M_act = st$M_act, D_SDA = st$D_SDA, M_exc = st$M_exc,
+        consump = st$consump, A_assim = st$A_assim,
+        M_m = st$M_m, M_act = st$M_act, D_SDA = st$D_SDA, M_exc = st$M_exc,
         O2_supply = st$O2_supply, O2_demand = st$O2_demand, O2_margin = st$O2_margin,
-        oxygen_exclusion = as.numeric(st$oxygen_exclusion), energetic_exclusion = as.numeric(st$energetic_exclusion))
+        oxygen_exclusion = as.numeric(st$oxygen_exclusion),
+        energetic_exclusion = as.numeric(st$energetic_exclusion))
     })
-
+    
     blk <- dplyr::bind_cols(tibble::tibble(mass = m), grid, as.data.frame(t(rr)))
     blocks[[i]] <- blk
+    
     if (isTRUE(progress)) utils::setTxtProgressBar(pb, i)
   }
-
+  
   res <- dplyr::bind_rows(blocks)
+  
   if (isTRUE(normalize_E)) {
     res <- dplyr::mutate(res,
-      E_net_norm = dplyr::if_else(is.finite(E_net) & is.finite(Cmax) & Cmax != 0, E_net / Cmax, NA_real_),
-      proc_real_frac = dplyr::if_else(is.finite(C_real) & is.finite(Cmax) & Cmax != 0, C_real / Cmax, NA_real_)
+                         E_net_norm = dplyr::if_else(is.finite(E_net) & is.finite(Cmax) & Cmax != 0, E_net / Cmax, NA_real_),
+                         proc_real_frac = dplyr::if_else(is.finite(C_real) & is.finite(C_pot) & C_pot != 0, C_real / C_pot, NA_real_)
     )
   }
+  
   tibble::as_tibble(res)
 }
 
@@ -128,7 +219,7 @@ add_regime_labels_ingestion <- function(df,
         TRUE ~ "Unclassified"
       )
     )
-
+  
   if (!keep_helpers) out <- dplyr::select(out, -exclusion, -prey_limited, -oxygen_limited, -co_limited)
   out
 }
@@ -136,29 +227,26 @@ add_regime_labels_ingestion <- function(df,
 interp_to_grid <- function(df, xcol, ycol, zcol, nx = 500, ny = 500) {
   x <- df[[xcol]]; y <- df[[ycol]]; z <- df[[zcol]]
   ok <- is.finite(x) & is.finite(y) & is.finite(z)
-
+  
   if (sum(ok) < 3) {
     out <- df[ok, c(xcol, ycol, zcol), drop = FALSE]
     return(out)
   }
-
+  
   xo <- seq(min(x[ok]), max(x[ok]), length.out = nx)
   yo <- seq(min(y[ok]), max(y[ok]), length.out = ny)
-
-  ip <- interp::interp(x[ok], y[ok], z[ok], xo = xo, yo = yo, linear = TRUE, extrap = FALSE, duplicate = "mean")
-
-  # Build output grid from requested axes to avoid NULL/length edge cases in ip$x/ip$y
+  
+  ip <- interp::interp(x[ok], y[ok], z[ok], xo = xo, yo = yo,
+                       linear = TRUE, extrap = FALSE, duplicate = "mean")
+  
   out <- expand.grid(stats::setNames(list(xo, yo), c(xcol, ycol)))
-
   zvec <- as.vector(ip$z)
   expected <- nrow(out)
-
-  # If interpolation returns an unexpected shape, fall back to original finite points
-  # instead of repeating a single value across the full grid.
+  
   if (length(zvec) != expected) {
     return(df[ok, c(xcol, ycol, zcol), drop = FALSE])
   }
-
+  
   out[[zcol]] <- zvec
   out
 }

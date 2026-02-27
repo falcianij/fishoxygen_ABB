@@ -1,0 +1,305 @@
+---
+title: "010_ABmodel_v21"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+## 0) Initialization
+
+```{r setup, message=FALSE, warning=FALSE}
+library(here)
+library(tidyverse)
+library(scales)
+library(ggh4x)
+
+# Source scripts (make sure model_functions_ingestion.R + analysis_functions_ingestion.R are updated as we did)
+file_sources <- list.files(here("scripts"), pattern = "*.R$", full.names = TRUE)
+invisible(lapply(file_sources, source))
+```
+
+```{r setup, message=FALSE, warning=FALSE}
+th <- theme_surface_default(base_size = 9, square = TRUE)
+
+tr <- list(
+  a_a = 80, b_R = 1,
+  a_g = 3, hm = 1, b_O = 2/3, K = 2.0, h = 2.0,
+  f_m = 0.1, b_m = 0.75,
+  a_e = 20, b_e = 2/3,
+  a_c = 60, b_c = 0.75,
+  a_SDA = 0.2, a_exc = 0.1,
+  T_ref = 10,
+  Q10_c = 2.00, Q10_m = 2.00, Q10_a = 1.00, Q10_o = 1.50
+)
+
+pO2seq <- seq(0, 30, by = 0.1)
+```
+
+
+## 1) Test diagnostics (single mass/temperature): pO2 vs prey index
+
+```{r}
+d_test <- compute_state_surface(
+  tr, masses = 1e4, Tseq = 10, pO2seq = pO2seq,
+  preys = seq(0, 1, by = 0.004),
+  prey_units = "prey_index",
+  pair_mode = "cross", progress = TRUE
+) %>%
+  add_masks() %>%
+  mutate(
+    M_m_norm   = M_m / Cmax,
+    M_act_norm = M_act / Cmax,
+    D_SDA_norm = D_SDA / Cmax,
+    M_exc_norm = M_exc / Cmax,
+    A_assim_norm = A_assim / Cmax
+  )
+
+# Optional interpolation per plot (choose only when you want it):
+#d_test_ip_E <- interp_surface(d_test, x="f_ref", y="pO2", z="E_net_norm", nx=350, ny=350) %>% add_masks()
+```
+
+```{r message=FALSE, warning=FALSE}
+# Example: no contours
+plot_surface_masked(d_test, x="f_ref", y="pO2", z="U_opt",
+                    palette="viridis", fill_title="U*",
+                    x_limits=c(0,1), y_limits=c(0,30),
+                    contours=NULL, theme=th ) +
+  scale_x_continuous(breaks = seq(0, 1, by = 0.2), labels = scales::label_number(accuracy = 0.1),
+                     limits = c(0, 1), expand = c(0, 0) ) +
+  labs(title="Cruising speed", x="Prey index", y=expression(p[O[2]]~"(kPa)"))
+
+# # Example: default contours for E_net_norm + use interpolated surface just for this plot
+# plot_surface_masked(d_test_ip_E, x="f_ref", y="pO2", z="E_net_norm",
+#                     palette="blue", fill_title="E/Cmax",
+#                     x_limits=c(0,1), y_limits=c(0,30),
+#                     contours="auto", theme=th) +
+#   labs(title="Available energy (interpolated)", x="Prey index", y=expression(p[O[2]]~"(kPa)"))
+
+# Example: custom contour overlay (choose what you contour, and how)
+plot_surface_masked(d_test, x="f_ref", y="pO2", z="f",
+                    palette="green", fill_title="f",
+                    limits=c(0,1), x_limits=c(0,1), y_limits=c(0,30),
+                    contours=list(
+                      contour_spec(z="f", breaks=seq(0,1,0.2), linewidth=0.22, alpha=0.9),
+                      contour_spec(z="g", breaks=seq(0,1,0.2), linewidth=0.22, alpha=0.6, colour="black")
+                    ),
+                    theme=th) +
+  scale_x_continuous(breaks = seq(0, 1, by = 0.2), labels = scales::label_number(accuracy = 0.1),
+                     limits = c(0, 1), expand = c(0, 0) ) +
+  labs(title="Food limitation with f + g contours", x="Prey index", y=expression(p[O[2]]~"(kPa)"))
+
+# Bivariate mix (contours toggleable)
+plot_fg_bivariate(d_test, x="f_ref", y="pO2",
+                  x_limits=c(0,1), y_limits=c(0,30),
+                  contour_fg_mult=FALSE, theme=th) +
+  scale_x_continuous(breaks = seq(0, 1, by = 0.2), labels = scales::label_number(accuracy = 0.1),
+                     limits = c(0, 1), expand = c(0, 0) ) +
+  labs(title="Bivariate limitation mix", x="Prey index", y=expression(p[O[2]]~"(kPa)"))
+```
+
+
+## 2) pO2 vs prey density (four separate 4-panel plots)
+
+```{r}
+d_prey <- compute_state_surface(
+  tr, masses=c(1e0,1e4), Tseq=c(5,25), pO2seq=pO2seq,
+  preys=seq(0,1,length.out=220), prey_units="prey_index",
+  pair_mode="cross", progress=TRUE
+) %>%
+  add_masks() %>%
+  mutate(
+    mass_lab=factor(mass, levels=c(1e0,1e4), labels=c("m = 1e0 g","m = 1e4 g")),
+    T_lab=factor(T, levels=c(5,25), labels=c("T = 5°C","T = 25°C"))
+  )
+```
+
+```{r message=FALSE, warning=FALSE}
+# Available energy
+plot_surface_masked(d_prey, x="f_ref", y="pO2", z="E_net_norm",
+                    palette="blue", fill_title="E/Cmax",
+                    x_limits=c(0,1), y_limits=c(0,30),
+                    contours="auto", theme=th) +
+  facet_grid2(rows=vars(T_lab), cols=vars(mass_lab)) +
+  scale_x_continuous(breaks = seq(0, 1, by = 0.2), labels = scales::label_number(accuracy = 0.1),
+                     limits = c(0, 1), expand = c(0, 0) ) +
+  labs(title="Available energy", x="Prey index", y=expression(p[O[2]]~"(kPa)"))
+
+# Cruising speed
+plot_surface_masked(d_prey, x="f_ref", y="pO2", z="U_opt",
+                    palette="viridis", fill_title="U (m/s)",
+                    x_limits=c(0,30), y_limits=c(0,30),
+                    contours="auto",
+                    theme=th) +
+  facet_grid2(rows=vars(f_lab), cols=vars(mass_lab)) +
+  labs(title="Available energy", x="Prey index", y=expression(p[O[2]]~"(kPa)"))
+
+# Bivariate limitation
+plot_fg_bivariate(d_prey, x="f_ref", y="pO2",
+                  x_limits=c(0,30), y_limits=c(0,30),
+                  contour_fg_mult=FALSE, theme=th) +
+  facet_grid2(rows=vars(f_lab), cols=vars(mass_lab)) +
+  labs(title="Bivariate limitation mix", x="Prey index", y=expression(p[O[2]]~"(kPa)"))
+```
+
+
+## 3) Feeding level: pO2 vs temperature (four separate 4-panel plots)
+
+```{r}
+d_temp_fl <- compute_state_surface(
+  tr, masses=c(1e0,1e4), Tseq=seq(0,30,by=0.25), pO2seq=pO2seq,
+  preys=c(0.9,0.6), prey_units="feeding_level",
+  pair_mode="cross", progress=TRUE
+) %>%
+  add_masks() %>%
+  mutate(
+    mass_lab=factor(mass, levels=c(1e0,1e4), labels=c("m = 1e0 g","m = 1e4 g")),
+    f_lab=factor(f_ref, levels=c(0.9,0.6), labels=c("feeding level = 0.9","feeding level = 0.6"))
+  )
+```
+
+```{r message=FALSE, warning=FALSE}
+# Available energy
+plot_surface_masked(d_temp_fl, x="T", y="pO2", z="E_net_norm",
+                    palette="blue", fill_title="E/Cmax",
+                    x_limits=c(0,30), y_limits=c(0,30),
+                    contours=list( #contours="auto",
+                      contour_spec(z="E_net_norm", breaks=seq(0,1,0.1), linewidth=0.22, alpha=1)
+                    ),
+                    theme=th) +
+  facet_grid2(rows=vars(f_lab), cols=vars(mass_lab)) +
+  labs(title="Available energy", x="Temperature (°C)", y=expression(p[O[2]]~"(kPa)"))
+
+# Cruising speed
+plot_surface_masked(d_temp_fl, x="T", y="pO2", z="U_opt",
+                    palette="viridis", fill_title="U (m/s)",
+                    x_limits=c(0,30), y_limits=c(0,30),
+                    contours="auto",
+                    theme=th) +
+  facet_grid2(rows=vars(f_lab), cols=vars(mass_lab)) +
+  labs(title="Available energy", x="Temperature (°C)", y=expression(p[O[2]]~"(kPa)"))
+
+# Bivariate limitation
+plot_fg_bivariate(d_temp_fl, x="T", y="pO2",
+                  x_limits=c(0,30), y_limits=c(0,30),
+                  contour_fg_mult=FALSE, theme=th) +
+  facet_grid2(rows=vars(f_lab), cols=vars(mass_lab)) +
+  labs(title="Bivariate limitation mix", x="Temperature (°C)", y=expression(p[O[2]]~"(kPa)"))
+```
+
+## 4) Feeding level: pO2 vs temperature (four separate 4-panel plots)
+
+```{r}
+d_temp_fl <- compute_state_surface(
+  tr, masses=c(1e0,1e4), Tseq=seq(0,30,by=0.25), pO2seq=pO2seq,
+  preys=c(0.9,0.6), prey_units="prey_index",
+  pair_mode="cross", progress=TRUE
+) %>%
+  add_masks() %>%
+  mutate(
+    mass_lab=factor(mass, levels=c(1e0,1e4), labels=c("m = 1e0 g","m = 1e4 g")),
+    f_lab=factor(f_ref, levels=c(0.9,0.6), labels=c("prey index = 0.9","prey index = 0.6"))
+  )
+```
+
+```{r message=FALSE, warning=FALSE}
+# Available energy
+plot_surface_masked(d_temp_fl, x="T", y="pO2", z="E_net_norm",
+                    palette="blue", fill_title="E/Cmax",
+                    x_limits=c(0,30), y_limits=c(0,30),
+                    contours=list( #contours="auto",
+                      contour_spec(z="E_net_norm", breaks=seq(0,1,0.1), linewidth=0.22, alpha=1)
+                    ),
+                    theme=th) +
+  facet_grid2(rows=vars(f_lab), cols=vars(mass_lab)) +
+  labs(title="Available energy", x="Temperature (°C)", y=expression(p[O[2]]~"(kPa)"))
+
+# Cruising speed
+plot_surface_masked(d_temp_fl, x="T", y="pO2", z="U_opt",
+                    palette="viridis", fill_title="U (m/s)",
+                    x_limits=c(0,30), y_limits=c(0,30),
+                    contours="auto",
+                    theme=th) +
+  facet_grid2(rows=vars(f_lab), cols=vars(mass_lab)) +
+  labs(title="Available energy", x="Temperature (°C)", y=expression(p[O[2]]~"(kPa)"))
+
+# Bivariate limitation
+plot_fg_bivariate(d_temp_fl, x="T", y="pO2",
+                  x_limits=c(0,30), y_limits=c(0,30),
+                  contour_fg_mult=FALSE, theme=th) +
+  facet_grid2(rows=vars(f_lab), cols=vars(mass_lab)) +
+  labs(title="Bivariate limitation mix", x="Temperature (°C)", y=expression(p[O[2]]~"(kPa)"))
+```
+
+
+## 5) Metabolic allocation (stacked; explicit excretion)
+
+```{r metabolic-allocation}
+mass_seq <- 10^seq(-3, 5, length.out = 120)
+scen <- tribble(
+  ~scenario, ~T, ~pO2, ~f_ref,
+  "Baseline", 10, 25, 0.75,
+  "Hyperthermic", 20, 25, 0.75,
+  "Hypoxic", 10, 10, 0.75,
+  "Oligotrophic", 10, 25, 0.50
+)
+
+alloc_long <- purrr::pmap_dfr(scen, function(scenario, T, pO2, f_ref) {
+  B_vec <- B_from_f(f_ref = rep(f_ref, length(mass_seq)), m = mass_seq, tr = tr,
+                    T_ref = rep(10, length(mass_seq)), pO2_ref = rep(25, length(mass_seq)),
+                    U_lo = 1e-5, U_mech = 5, enforce_O2_feasible = TRUE)
+  purrr::map2_dfr(mass_seq, B_vec, function(m, B) {
+    st <- find_U_opt(pO2_env = pO2, T = T, m = m, prey = B, tr = tr, U_lo = 1e-5, U_mech = 5)
+    tibble(mass = m, Cmax = st$Cmax,
+           "Basal metabolism" = st$M_m, "Active metabolism" = st$M_act, "SDA" = st$D_SDA, "Excretion" = st$M_exc, "Available energy" = st$E_net)
+  }) %>% mutate(scenario = scenario)
+}) %>%
+  pivot_longer(cols = c("Basal metabolism", "Active metabolism", "SDA", "Excretion", "Available energy"), names_to = "Process", values_to = "value") %>%
+  mutate(value_norm = value / Cmax,
+         Process = factor(Process, levels = c("Basal metabolism", "Active metabolism", "SDA", "Excretion", "Available energy")))
+
+alloc_cols <- c("Basal metabolism"="#440154", "Active metabolism"="#8a5796", "SDA"="#e0bce8", "Excretion"="gray90", "Available energy"="#67A5CA")
+
+ggplot(alloc_long, aes(x = mass, y = value_norm, fill = Process)) +
+  geom_area(position = "stack", color = "gray50", linewidth = 0.25) +
+  scale_y_continuous(limits = c(0,1), expand = c(0, 0)) +
+  scale_x_log10(labels = label_scientific(), expand = c(0, 0)) +
+  scale_fill_manual(values = alloc_cols) +
+  facet_wrap(~scenario, nrow = 1) +
+  labs(x = "Mass (g)", y = "Allocation / Cmax", title = "Metabolic allocation") +
+  th #base_theme + square_theme
+```
+
+```{r metabolic-allocation-2, warning=FALSE}
+mass_seq <- 10^seq(-3, 5, length.out = 120)
+scen <- tribble(
+  ~scenario, ~T, ~pO2, ~f_ref,
+  "Baseline", 10, 25, 0.75,
+  "Hyperthermic + Hypoxic", 20, 10, 0.75,
+  "Hypoxic + Oligotrophic", 10, 10, 0.50,
+  "Oligotrophic + Hyperthermic", 20, 25, 0.50
+)
+
+alloc_long <- purrr::pmap_dfr(scen, function(scenario, T, pO2, f_ref) {
+  B_vec <- B_from_f(f_ref = rep(f_ref, length(mass_seq)), m = mass_seq, tr = tr,
+                    T_ref = rep(10, length(mass_seq)), pO2_ref = rep(25, length(mass_seq)),
+                    U_lo = 1e-5, U_mech = 5, enforce_O2_feasible = TRUE)
+  purrr::map2_dfr(mass_seq, B_vec, function(m, B) {
+    st <- find_U_opt(pO2_env = pO2, T = T, m = m, prey = B, tr = tr, U_lo = 1e-5, U_mech = 5)
+    tibble(mass = m, Cmax = st$Cmax,
+           "Basal metabolism" = st$M_m, "Active metabolism" = st$M_act, "SDA" = st$D_SDA, "Excretion" = st$M_exc, "Available energy" = st$E_net)
+  }) %>% mutate(scenario = scenario)
+}) %>%
+  pivot_longer(cols = c("Basal metabolism", "Active metabolism", "SDA", "Excretion", "Available energy"), names_to = "Process", values_to = "value") %>%
+  mutate(value_norm = value / Cmax,
+         Process = factor(Process, levels = c("Basal metabolism", "Active metabolism", "SDA", "Excretion", "Available energy")))
+
+alloc_cols <- c("Basal metabolism"="#440154", "Active metabolism"="#8a5796", "SDA"="#e0bce8", "Excretion"="gray90", "Available energy"="#67A5CA")
+
+ggplot(alloc_long, aes(x = mass, y = value_norm, fill = Process)) +
+  geom_area(position = "stack", color = "gray50", linewidth = 0.25) +
+  scale_y_continuous(limits = c(0,1), expand = c(0, 0)) +
+  scale_x_log10(labels = label_scientific(), expand = c(0, 0)) +
+  scale_fill_manual(values = alloc_cols) +
+  facet_wrap(~scenario, nrow = 1) +
+  labs(x = "Mass (g)", y = "Allocation / Cmax", title = "Metabolic allocation") +
+  th #base_theme + square_theme
+```
