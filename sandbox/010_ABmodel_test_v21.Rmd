@@ -242,17 +242,31 @@ scen <- tribble(
   "Oligotrophic", 10, 25, 0.50
 )
 
-alloc_long <- purrr::pmap_dfr(scen, function(scenario, T, pO2, f_ref) {
+alloc_state <- purrr::pmap_dfr(scen, function(scenario, T, pO2, f_ref) {
   B_vec <- B_from_f(f_ref = rep(f_ref, length(mass_seq)), m = mass_seq, tr = tr,
                     T_ref = rep(10, length(mass_seq)), pO2_ref = rep(25, length(mass_seq)),
                     U_lo = 1e-5, U_mech = 5, enforce_O2_feasible = TRUE)
   purrr::map2_dfr(mass_seq, B_vec, function(m, B) {
     st <- find_U_opt(pO2_env = pO2, T = T, m = m, prey = B, tr = tr, U_lo = 1e-5, U_mech = 5)
-    tibble(mass = m, Cmax = st$Cmax,
-           "Basal metabolism" = st$M_m, "Active metabolism" = st$M_act, "SDA" = st$D_SDA, "Excretion" = st$M_exc, "Available energy" = st$E_net)
-  }) %>% mutate(scenario = scenario)
-}) %>%
-  pivot_longer(cols = c("Basal metabolism", "Active metabolism", "SDA", "Excretion", "Available energy"), names_to = "Process", values_to = "value") %>%
+    tibble(
+      scenario = scenario,
+      mass = m,
+      Cmax = st$Cmax,
+      f = st$f,
+      g = st$g,
+      U = st$U_opt,
+      `Basal metabolism` = st$M_m,
+      `Active metabolism` = st$M_act,
+      SDA = st$D_SDA,
+      Excretion = st$M_exc,
+      `Available energy` = st$E_net
+    )
+  })
+})
+
+alloc_long <- alloc_state %>%
+  pivot_longer(cols = c("Basal metabolism", "Active metabolism", "SDA", "Excretion", "Available energy"),
+               names_to = "Process", values_to = "value") %>%
   mutate(value_norm = value / Cmax,
          Process = factor(Process, levels = c("Basal metabolism", "Active metabolism", "SDA", "Excretion", "Available energy")))
 
@@ -265,7 +279,21 @@ ggplot(alloc_long, aes(x = mass, y = value_norm, fill = Process)) +
   scale_fill_manual(values = alloc_cols) +
   facet_wrap(~scenario, nrow = 1) +
   labs(x = "Mass (g)", y = "Allocation / Cmax", title = "Metabolic allocation") +
-  th #base_theme + square_theme
+  th
+
+alloc_state %>%
+  select(scenario, mass, f, g) %>%
+  pivot_longer(cols = c(f, g), names_to = "limiter", values_to = "value") %>%
+  mutate(limiter = factor(limiter, levels = c("g", "f"))) %>%
+  ggplot(aes(x = mass, y = value, colour = limiter)) +
+  geom_line(linewidth = 0.8) +
+  scale_color_manual(values = c(g = "purple", f = "green")) +
+  scale_x_log10(labels = label_scientific(), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  facet_wrap(~scenario, nrow = 1) +
+  labs(x = "Mass (g)", y = "Limitation", colour = NULL,
+       title = "f and g across size (aligned by scenario)") +
+  th
 ```
 
 ```{r metabolic-allocation-2, warning=FALSE}
@@ -278,17 +306,31 @@ scen <- tribble(
   "Oligotrophic + Hyperthermic", 20, 25, 0.50
 )
 
-alloc_long <- purrr::pmap_dfr(scen, function(scenario, T, pO2, f_ref) {
+alloc_state <- purrr::pmap_dfr(scen, function(scenario, T, pO2, f_ref) {
   B_vec <- B_from_f(f_ref = rep(f_ref, length(mass_seq)), m = mass_seq, tr = tr,
                     T_ref = rep(10, length(mass_seq)), pO2_ref = rep(25, length(mass_seq)),
                     U_lo = 1e-5, U_mech = 5, enforce_O2_feasible = TRUE)
   purrr::map2_dfr(mass_seq, B_vec, function(m, B) {
     st <- find_U_opt(pO2_env = pO2, T = T, m = m, prey = B, tr = tr, U_lo = 1e-5, U_mech = 5)
-    tibble(mass = m, Cmax = st$Cmax,
-           "Basal metabolism" = st$M_m, "Active metabolism" = st$M_act, "SDA" = st$D_SDA, "Excretion" = st$M_exc, "Available energy" = st$E_net)
-  }) %>% mutate(scenario = scenario)
-}) %>%
-  pivot_longer(cols = c("Basal metabolism", "Active metabolism", "SDA", "Excretion", "Available energy"), names_to = "Process", values_to = "value") %>%
+    tibble(
+      scenario = scenario,
+      mass = m,
+      Cmax = st$Cmax,
+      f = st$f,
+      g = st$g,
+      U = st$U_opt,
+      `Basal metabolism` = st$M_m,
+      `Active metabolism` = st$M_act,
+      SDA = st$D_SDA,
+      Excretion = st$M_exc,
+      `Available energy` = st$E_net
+    )
+  })
+})
+
+alloc_long <- alloc_state %>%
+  pivot_longer(cols = c("Basal metabolism", "Active metabolism", "SDA", "Excretion", "Available energy"),
+               names_to = "Process", values_to = "value") %>%
   mutate(value_norm = value / Cmax,
          Process = factor(Process, levels = c("Basal metabolism", "Active metabolism", "SDA", "Excretion", "Available energy")))
 
@@ -301,5 +343,99 @@ ggplot(alloc_long, aes(x = mass, y = value_norm, fill = Process)) +
   scale_fill_manual(values = alloc_cols) +
   facet_wrap(~scenario, nrow = 1) +
   labs(x = "Mass (g)", y = "Allocation / Cmax", title = "Metabolic allocation") +
-  th #base_theme + square_theme
+  th
+
+alloc_state %>%
+  select(scenario, mass, f, g) %>%
+  pivot_longer(cols = c(f, g), names_to = "limiter", values_to = "value") %>%
+  mutate(limiter = factor(limiter, levels = c("g", "f"))) %>%
+  ggplot(aes(x = mass, y = value, colour = limiter)) +
+  geom_line(linewidth = 0.8) +
+  scale_color_manual(values = c(g = "purple", f = "green")) +
+  scale_x_log10(labels = label_scientific(), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  facet_wrap(~scenario, nrow = 1) +
+  labs(x = "Mass (g)", y = "Limitation", colour = NULL,
+       title = "f and g across size (aligned by scenario)") +
+  th
+```
+
+## 6) E_avail over temperature: prey index vs feeding level
+
+```{r energy-over-temperature}
+T_seq <- seq(0, 30, by = 0.25)
+fixed_prey_index <- 0.75
+fixed_feeding_level <- 0.75
+show_U <- FALSE
+
+scenario_grid <- crossing(
+  mass = c(1e0, 1e4),
+  pO2 = c(25, 10),
+  mode = c("Fixed prey index", "Fixed feeding level")
+) %>%
+  mutate(
+    mass_lab = factor(mass, levels = c(1e0, 1e4), labels = c("m = 1e0 g", "m = 1e4 g")),
+    scenario = factor(paste(mode, "|", pO2, "kPa"),
+                      levels = c("Fixed prey index | 25 kPa", "Fixed prey index | 10 kPa",
+                                 "Fixed feeding level | 25 kPa", "Fixed feeding level | 10 kPa"))
+  )
+
+temp_series <- purrr::pmap_dfr(scenario_grid, function(mass, pO2, mode, mass_lab, scenario) {
+  if (mode == "Fixed prey index") {
+    d <- compute_state_surface(
+      tr, masses = mass, Tseq = T_seq, pO2seq = pO2,
+      preys = fixed_prey_index, prey_units = "prey_index",
+      pair_mode = "cross", progress = FALSE
+    )
+  } else {
+    d <- compute_state_surface(
+      tr, masses = mass, Tseq = T_seq, pO2seq = pO2,
+      preys = fixed_feeding_level, prey_units = "feeding_level",
+      pair_mode = "cross", progress = FALSE
+    )
+  }
+
+  d %>% mutate(mode = mode, mass_lab = mass_lab, scenario = scenario)
+})
+
+line_cols <- c(
+  "Fixed prey index | 25 kPa" = "#1f78b4",
+  "Fixed prey index | 10 kPa" = "#a6cee3",
+  "Fixed feeding level | 25 kPa" = "#e31a1c",
+  "Fixed feeding level | 10 kPa" = "#fb9a99"
+)
+
+ggplot(temp_series, aes(x = T, y = E_net_norm, colour = scenario)) +
+  geom_line(linewidth = 0.85) +
+  scale_color_manual(values = line_cols) +
+  facet_wrap(~mass_lab, nrow = 1) +
+  scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  labs(
+    x = "Temperature (°C)",
+    y = "E_avail / Cmax",
+    colour = NULL,
+    title = "Available energy over temperature",
+    subtitle = paste0("Fixed prey index = ", fixed_prey_index, ", fixed feeding level = ", fixed_feeding_level)
+  ) +
+  th
+
+limiter_cols <- c(f = "green", g = "purple", U_opt = "#ff8c00")
+metrics_to_plot <- c("f", "g")
+if (isTRUE(show_U)) metrics_to_plot <- c(metrics_to_plot, "U_opt")
+
+temp_series %>%
+  select(T, mass_lab, scenario, all_of(metrics_to_plot)) %>%
+  pivot_longer(cols = all_of(metrics_to_plot), names_to = "metric", values_to = "value") %>%
+  mutate(metric = factor(metric, levels = c("f", "g", "U_opt"))) %>%
+  ggplot(aes(x = T, y = value, colour = metric, linetype = scenario)) +
+  geom_line(linewidth = 0.8) +
+  scale_color_manual(values = limiter_cols[names(limiter_cols) %in% metrics_to_plot]) +
+  facet_wrap(~mass_lab, nrow = 1) +
+  labs(
+    x = "Temperature (°C)", y = "Value",
+    colour = NULL, linetype = NULL,
+    title = "f and g over temperature by scenario",
+    subtitle = "Set show_U = TRUE to include U"
+  ) +
+  th
 ```
