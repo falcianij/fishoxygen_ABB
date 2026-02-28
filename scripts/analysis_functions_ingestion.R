@@ -56,8 +56,16 @@ compute_state_surface <- function(tr,
   }
   spec <- if (pair_mode == "zip") make_spec_zip() else make_spec_cross()
   
+  # ----------------------- timing helpers -----------------------
+  t0 <- Sys.time()
+  fmt_elapsed <- function(t_start) {
+    dt <- as.numeric(difftime(Sys.time(), t_start, units = "secs"))
+    mins <- floor(dt / 60)
+    secs <- round(dt - 60 * mins)
+    sprintf("%dm %02ds", mins, secs)
+  }
+  
   # ----------------------- caching for B_from_f -----------------------
-  # Cache keys include parameters that affect B_from_f results.
   cache <- new.env(parent = emptyenv())
   
   key_pi <- function(m, f_ref) {
@@ -117,17 +125,12 @@ compute_state_surface <- function(tr,
   
   for (i in seq_len(nrow(spec))) {
     m <- spec$mass[i]
-    
-    # Build (T,pO2) grid once
     grid <- tidyr::expand_grid(T = Tseq, pO2 = pO2seq)
     
-    # Precompute prey biomass B on the minimal needed axes
-    # (crucially: NEVER depends on pO2 for prey_index or feeding_level)
     if (prey_units == "biomass") {
       B_mode <- "biomass"
       B_const <- spec$prey_arg[i]
       f_ref_out <- NA_real_
-      # We'll use B_const for all grid rows
       B_lookup <- NULL
     } else if (prey_units %in% c("prey_index", "feeding_level")) {
       B_mode <- prey_units
@@ -135,12 +138,9 @@ compute_state_surface <- function(tr,
       f_ref_out <- spec$prey_arg[i]
       
       if (prey_units == "prey_index") {
-        # cache once per (m, f_ref)
         B_const <- get_B_prey_index(m, f_ref)
         B_lookup <- NULL
       } else {
-        # feeding_level: cache once per (m, f_ref, T)
-        # Precompute a vector aligned with Tseq so lookup is O(1)
         B_vec <- vapply(Tseq, function(Tval) get_B_feeding_level(m, f_ref, Tval), numeric(1))
         B_lookup <- B_vec
         B_const <- NA_real_
@@ -152,13 +152,11 @@ compute_state_surface <- function(tr,
       B_lookup <- NULL
     }
     
-    # Fast row-evaluator: only find_U_opt per grid point; no B_from_f inside.
     rr <- apply(as.matrix(grid), 1, function(row) {
       Tval <- as.numeric(row[[1]])
       pO2v <- as.numeric(row[[2]])
       
       B_used <- if (B_mode == "feeding_level") {
-        # grid built from Tseq, so match should succeed
         idx <- match(Tval, Tseq)
         if (is.na(idx)) idx <- which.min(abs(Tseq - Tval))
         B_lookup[[idx]]
@@ -193,6 +191,10 @@ compute_state_surface <- function(tr,
                          E_net_norm = dplyr::if_else(is.finite(E_net) & is.finite(Cmax) & Cmax != 0, E_net / Cmax, NA_real_),
                          proc_real_frac = dplyr::if_else(is.finite(C_real) & is.finite(C_pot) & C_pot != 0, C_real / C_pot, NA_real_)
     )
+  }
+  
+  if (isTRUE(progress)) {
+    message(" compute_state_surface(): done in ", fmt_elapsed(t0))
   }
   
   tibble::as_tibble(res)

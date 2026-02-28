@@ -186,6 +186,14 @@ scale_fill_palette <- function(palette = c("blue", "viridis", "green", "purple",
                       oob = oob, na.value = na.value, guide = guide)
 }
 
+label_10pow <- function() {
+  function(x) {
+    # x are break values on the original scale (e.g., 0.001, 0.01, 0.1, 1, 10, ...)
+    ex <- round(log10(x))
+    parse(text = paste0("10^", ex))
+  }
+}
+
 # --------------------------- Main surface plotter ---------------------------
 
 # plot_surface_masked() is your workhorse.

@@ -58,34 +58,79 @@ d_test <- compute_state_surface(
 ```
 
 ```{r message=FALSE, warning=FALSE}
-# Example: no contours
-plot_surface_masked(d_test, x="f_ref", y="pO2", z="U_opt",
-                    palette="viridis", fill_title="U*",
+# Available energy
+plot_surface_masked(d_test, x="f_ref", y="pO2", z="E_net_norm",
+                    palette="blue", fill_title="Available energy",
                     x_limits=c(0,1), y_limits=c(0,30),
-                    contours=NULL, theme=th ) +
-  scale_x_continuous(breaks = seq(0, 1, by = 0.2), labels = scales::label_number(accuracy = 0.1),
-                     limits = c(0, 1), expand = c(0, 0) ) +
+                    contours="auto",
+                    theme=th) +
+  labs(title="Available energy", x="Prey index", y=expression(p[O[2]]~"(kPa)"))
+
+# SDA metabolism
+plot_surface_masked(d_test, x="f_ref", y="pO2", z="D_SDA_norm",
+                    palette="red", fill_title="SDA metabolism",
+                    x_limits=c(0,1), y_limits=c(0,30),
+                    contours="auto",
+                    theme=th) +
+  labs(title="SDA metabolism", x="Prey index", y=expression(p[O[2]]~"(kPa)"))
+
+# Excretion
+plot_surface_masked(d_test, x="f_ref", y="pO2", z="M_exc_norm",
+                    palette="red", fill_title="Excretion",
+                    x_limits=c(0,1), y_limits=c(0,30),
+                    contours="auto",
+                    theme=th) +
+  labs(title="Excretion", x="Prey index", y=expression(p[O[2]]~"(kPa)"))
+
+# Basal metabolism
+plot_surface_masked(d_test, x="f_ref", y="pO2", z="M_m_norm",
+                    palette="red", fill_title="Basal metabolism",
+                    x_limits=c(0,1), y_limits=c(0,30),
+                    contours="auto",
+                    theme=th) +
+  labs(title="Basal metabolism", x="Prey index", y=expression(p[O[2]]~"(kPa)"))
+
+# Active metabolism
+plot_surface_masked(d_test, x="f_ref", y="pO2", z="M_act_norm",
+                    palette="red", fill_title="Active metabolism",
+                    x_limits=c(0,1), y_limits=c(0,30),
+                    contours="auto",
+                    theme=th) +
+  labs(title="Active metabolism", x="Prey index", y=expression(p[O[2]]~"(kPa)"))
+
+# Cruising speed
+plot_surface_masked(d_test, x="f_ref", y="pO2", z="U_opt",
+                    palette="viridis", fill_title="U (m/s)",
+                    x_limits=c(0,1), y_limits=c(0,30),
+                    contours="auto",
+                    theme=th) +
   labs(title="Cruising speed", x="Prey index", y=expression(p[O[2]]~"(kPa)"))
 
-# # Example: default contours for E_net_norm + use interpolated surface just for this plot
-# plot_surface_masked(d_test_ip_E, x="f_ref", y="pO2", z="E_net_norm",
-#                     palette="blue", fill_title="E/Cmax",
-#                     x_limits=c(0,1), y_limits=c(0,30),
-#                     contours="auto", theme=th) +
-#   labs(title="Available energy (interpolated)", x="Prey index", y=expression(p[O[2]]~"(kPa)"))
-
-# Example: custom contour overlay (choose what you contour, and how)
+# f limitation
 plot_surface_masked(d_test, x="f_ref", y="pO2", z="f",
                     palette="green", fill_title="f",
                     limits=c(0,1), x_limits=c(0,1), y_limits=c(0,30),
                     contours=list(
-                      contour_spec(z="f", breaks=seq(0,1,0.2), linewidth=0.22, alpha=0.9),
-                      contour_spec(z="g", breaks=seq(0,1,0.2), linewidth=0.22, alpha=0.6, colour="black")
+                      contour_spec(z="f", breaks=seq(0,1,0.2), linewidth=0.22, alpha=1)#,
+                      #contour_spec(z="g", breaks=seq(0,1,0.2), linewidth=0.22, alpha=1, colour="black")
                     ),
                     theme=th) +
   scale_x_continuous(breaks = seq(0, 1, by = 0.2), labels = scales::label_number(accuracy = 0.1),
                      limits = c(0, 1), expand = c(0, 0) ) +
-  labs(title="Food limitation with f + g contours", x="Prey index", y=expression(p[O[2]]~"(kPa)"))
+  labs(title="Food limitation with f contours", x="Prey index", y=expression(p[O[2]]~"(kPa)"))
+
+# g limitation
+plot_surface_masked(d_test, x="f_ref", y="pO2", z="g",
+                    palette="purple", fill_title="g",
+                    limits=c(0,1), x_limits=c(0,1), y_limits=c(0,30),
+                    contours=list(
+                      #contour_spec(z="f", breaks=seq(0,1,0.2), linewidth=0.22, alpha=1),
+                      contour_spec(z="g", breaks=seq(0,1,0.2), linewidth=0.22, alpha=1, colour="black")
+                    ),
+                    theme=th) +
+  scale_x_continuous(breaks = seq(0, 1, by = 0.2), labels = scales::label_number(accuracy = 0.1),
+                     limits = c(0, 1), expand = c(0, 0) ) +
+  labs(title="Oxygen limitation with g contours", x="Prey index", y=expression(p[O[2]]~"(kPa)"))
 
 # Bivariate mix (contours toggleable)
 plot_fg_bivariate(d_test, x="f_ref", y="pO2",
@@ -94,6 +139,29 @@ plot_fg_bivariate(d_test, x="f_ref", y="pO2",
   scale_x_continuous(breaks = seq(0, 1, by = 0.2), labels = scales::label_number(accuracy = 0.1),
                      limits = c(0, 1), expand = c(0, 0) ) +
   labs(title="Bivariate limitation mix", x="Prey index", y=expression(p[O[2]]~"(kPa)"))
+
+# pO2 interior
+plot_surface_masked(d_test, x="f_ref", y="pO2", z="pO2_int",
+                    palette="purple", fill_title="Interior oxygen",
+                    x_limits=c(0,1), y_limits=c(0,30),
+                    contours="auto",
+                    theme=th) +
+  labs(title="Interior oxygen", x="Prey index", y=expression(p[O[2]]~"(kPa)"))
+
+# Prey density
+d_test2 <- d_test %>%
+  dplyr::mutate(
+    B_used_pos = dplyr::if_else(B_used <= 0 | !is.finite(B_used), NA_real_, B_used),
+    logB = log10(B_used_pos)
+  )
+plot_surface_masked(d_test2, x="f_ref", y="pO2", z="logB",
+                    palette="green",
+                    fill_title=expression(log[10]*"(Prey biomass)"),
+                    x_limits=c(0,1), y_limits=c(0,30),
+                    limits = c(0, 4),   # <- log10 limits
+                    contours=contour_spec(z="logB", breaks=c(1e0,1e1,1e2,1e3,1e4), linewidth=0.22, alpha=1),
+                    theme=th) +
+  labs(title="Prey density", x="Prey index", y=expression(p[O[2]]~"(kPa)"))
 ```
 
 
@@ -126,17 +194,17 @@ plot_surface_masked(d_prey, x="f_ref", y="pO2", z="E_net_norm",
 # Cruising speed
 plot_surface_masked(d_prey, x="f_ref", y="pO2", z="U_opt",
                     palette="viridis", fill_title="U (m/s)",
-                    x_limits=c(0,30), y_limits=c(0,30),
+                    x_limits=c(0,1), y_limits=c(0,30),
                     contours="auto",
                     theme=th) +
-  facet_grid2(rows=vars(f_lab), cols=vars(mass_lab)) +
+  facet_grid2(rows=vars(T_lab), cols=vars(mass_lab)) +
   labs(title="Available energy", x="Prey index", y=expression(p[O[2]]~"(kPa)"))
 
 # Bivariate limitation
 plot_fg_bivariate(d_prey, x="f_ref", y="pO2",
-                  x_limits=c(0,30), y_limits=c(0,30),
+                  x_limits=c(0,1), y_limits=c(0,30),
                   contour_fg_mult=FALSE, theme=th) +
-  facet_grid2(rows=vars(f_lab), cols=vars(mass_lab)) +
+  facet_grid2(rows=vars(T_lab), cols=vars(mass_lab)) +
   labs(title="Bivariate limitation mix", x="Prey index", y=expression(p[O[2]]~"(kPa)"))
 ```
 
@@ -185,12 +253,14 @@ plot_fg_bivariate(d_temp_fl, x="T", y="pO2",
   labs(title="Bivariate limitation mix", x="Temperature (°C)", y=expression(p[O[2]]~"(kPa)"))
 ```
 
-## 4) Feeding level: pO2 vs temperature (four separate 4-panel plots)
+
+## 4) Prey index: pO2 vs temperature (four separate 4-panel plots)
 
 ```{r}
 d_temp_fl <- compute_state_surface(
   tr, masses=c(1e0,1e4), Tseq=seq(0,30,by=0.25), pO2seq=pO2seq,
   preys=c(0.9,0.6), prey_units="prey_index",
+  D=2,
   pair_mode="cross", progress=TRUE
 ) %>%
   add_masks() %>%
@@ -237,7 +307,7 @@ mass_seq <- 10^seq(-3, 5, length.out = 120)
 scen <- tribble(
   ~scenario, ~T, ~pO2, ~f_ref,
   "Baseline", 10, 25, 0.75,
-  "Hyperthermic", 20, 25, 0.75,
+  "Hyperthermic", 30, 25, 0.75,
   "Hypoxic", 10, 10, 0.75,
   "Oligotrophic", 10, 25, 0.50
 )
@@ -275,24 +345,33 @@ alloc_cols <- c("Basal metabolism"="#440154", "Active metabolism"="#8a5796", "SD
 ggplot(alloc_long, aes(x = mass, y = value_norm, fill = Process)) +
   geom_area(position = "stack", color = "gray50", linewidth = 0.25) +
   scale_y_continuous(limits = c(0,1), expand = c(0, 0)) +
-  scale_x_log10(labels = label_scientific(), expand = c(0, 0)) +
+    scale_x_log10(
+    breaks = 10^c(-2, 0, 2, 4),
+    labels = label_10pow(),
+    expand = c(0, 0)
+  ) +
   scale_fill_manual(values = alloc_cols) +
   facet_wrap(~scenario, nrow = 1) +
   labs(x = "Mass (g)", y = "Allocation / Cmax", title = "Metabolic allocation") +
   th
 
 alloc_state %>%
-  select(scenario, mass, f, g) %>%
-  pivot_longer(cols = c(f, g), names_to = "limiter", values_to = "value") %>%
-  mutate(limiter = factor(limiter, levels = c("g", "f"))) %>%
+  mutate(fg = f * g) %>%
+  select(scenario, mass, f, g, fg) %>%
+  pivot_longer(cols = c(f, g, fg), names_to = "limiter", values_to = "value") %>%
+  mutate(limiter = factor(limiter, levels = c("g", "f", "fg"))) %>%
   ggplot(aes(x = mass, y = value, colour = limiter)) +
   geom_line(linewidth = 0.8) +
-  scale_color_manual(values = c(g = "purple", f = "green")) +
-  scale_x_log10(labels = label_scientific(), expand = c(0, 0)) +
+  scale_color_manual(values = c(g = "#6a51a3", f = "#238b45", fg = "black")) +
+  scale_x_log10(
+    breaks = 10^c(-2, 0, 2, 4),
+    labels = label_10pow(),
+    expand = c(0, 0)
+  ) +
   scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
   facet_wrap(~scenario, nrow = 1) +
   labs(x = "Mass (g)", y = "Limitation", colour = NULL,
-       title = "f and g across size (aligned by scenario)") +
+       title = "f, g, and f·g across size (aligned by scenario)") +
   th
 ```
 
@@ -339,103 +418,223 @@ alloc_cols <- c("Basal metabolism"="#440154", "Active metabolism"="#8a5796", "SD
 ggplot(alloc_long, aes(x = mass, y = value_norm, fill = Process)) +
   geom_area(position = "stack", color = "gray50", linewidth = 0.25) +
   scale_y_continuous(limits = c(0,1), expand = c(0, 0)) +
-  scale_x_log10(labels = label_scientific(), expand = c(0, 0)) +
+    scale_x_log10(
+    breaks = 10^c(-2, 0, 2, 4),
+    labels = label_10pow(),
+    expand = c(0, 0)
+  ) +
   scale_fill_manual(values = alloc_cols) +
   facet_wrap(~scenario, nrow = 1) +
   labs(x = "Mass (g)", y = "Allocation / Cmax", title = "Metabolic allocation") +
   th
 
 alloc_state %>%
-  select(scenario, mass, f, g) %>%
-  pivot_longer(cols = c(f, g), names_to = "limiter", values_to = "value") %>%
-  mutate(limiter = factor(limiter, levels = c("g", "f"))) %>%
+  mutate(fg = f * g) %>%
+  select(scenario, mass, f, g, fg) %>%
+  pivot_longer(cols = c(f, g, fg), names_to = "limiter", values_to = "value") %>%
+  mutate(limiter = factor(limiter, levels = c("g", "f", "fg"))) %>%
   ggplot(aes(x = mass, y = value, colour = limiter)) +
   geom_line(linewidth = 0.8) +
-  scale_color_manual(values = c(g = "purple", f = "green")) +
-  scale_x_log10(labels = label_scientific(), expand = c(0, 0)) +
+  scale_color_manual(values = c(g = "#6a51a3", f = "#238b45", fg = "black")) +
+  scale_x_log10(
+    breaks = 10^c(-2, 0, 2, 4),
+    labels = label_10pow(),
+    expand = c(0, 0)
+  ) +
   scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
   facet_wrap(~scenario, nrow = 1) +
   labs(x = "Mass (g)", y = "Limitation", colour = NULL,
-       title = "f and g across size (aligned by scenario)") +
+       title = "f, g, and f·g across size (aligned by scenario)") +
   th
 ```
 
 ## 6) E_avail over temperature: prey index vs feeding level
 
-```{r energy-over-temperature}
+```{r message=FALSE, warning=FALSE}
 T_seq <- seq(0, 30, by = 0.25)
 fixed_prey_index <- 0.75
 fixed_feeding_level <- 0.75
 show_U <- FALSE
 
-scenario_grid <- crossing(
+# Keep: prey index at 25 & 10 kPa; feeding level at 25 kPa only
+scenario_grid <- tidyr::crossing(
   mass = c(1e0, 1e4),
-  pO2 = c(25, 10),
-  mode = c("Fixed prey index", "Fixed feeding level")
+  mode = c("Fixed prey index", "Fixed feeding level"),
+  pO2 = c(25, 10)
 ) %>%
-  mutate(
+  dplyr::filter(!(mode == "Fixed feeding level" & pO2 == 10)) %>%
+  dplyr::mutate(
     mass_lab = factor(mass, levels = c(1e0, 1e4), labels = c("m = 1e0 g", "m = 1e4 g")),
-    scenario = factor(paste(mode, "|", pO2, "kPa"),
-                      levels = c("Fixed prey index | 25 kPa", "Fixed prey index | 10 kPa",
-                                 "Fixed feeding level | 25 kPa", "Fixed feeding level | 10 kPa"))
+    mode = factor(mode, levels = c("Fixed prey index", "Fixed feeding level")),
+    pO2_lab = factor(pO2, levels = c(25, 10), labels = c("25 kPa", "10 kPa"))
   )
 
-temp_series <- purrr::pmap_dfr(scenario_grid, function(mass, pO2, mode, mass_lab, scenario) {
-  if (mode == "Fixed prey index") {
-    d <- compute_state_surface(
+temp_series <- purrr::pmap_dfr(scenario_grid, function(mass, mode, pO2, mass_lab, pO2_lab) {
+  d <- if (mode == "Fixed prey index") {
+    compute_state_surface(
       tr, masses = mass, Tseq = T_seq, pO2seq = pO2,
       preys = fixed_prey_index, prey_units = "prey_index",
       pair_mode = "cross", progress = FALSE
     )
   } else {
-    d <- compute_state_surface(
+    compute_state_surface(
       tr, masses = mass, Tseq = T_seq, pO2seq = pO2,
       preys = fixed_feeding_level, prey_units = "feeding_level",
       pair_mode = "cross", progress = FALSE
     )
   }
 
-  d %>% mutate(mode = mode, mass_lab = mass_lab, scenario = scenario)
+  dplyr::mutate(d, mode = mode, pO2 = pO2, pO2_lab = pO2_lab, mass_lab = mass_lab)
 })
 
-line_cols <- c(
-  "Fixed prey index | 25 kPa" = "#1f78b4",
-  "Fixed prey index | 10 kPa" = "#a6cee3",
-  "Fixed feeding level | 25 kPa" = "#e31a1c",
-  "Fixed feeding level | 10 kPa" = "#fb9a99"
-)
+# ------------------------------ Plot 1: E_avail (all blue; style encodes scenario) ------------------------------
+mode_lw <- c("Fixed prey index" = 0.75, "Fixed feeding level" = 1.5)
+pO2_ltys  <- c("25 kPa" = "solid", "10 kPa" = "22")  # one simple dashed pattern
 
-ggplot(temp_series, aes(x = T, y = E_net_norm, colour = scenario)) +
-  geom_line(linewidth = 0.85) +
-  scale_color_manual(values = line_cols) +
+# IMPORTANT: make sure mode is a factor with these levels, same as Plot 2
+temp_series <- temp_series %>%
+  dplyr::mutate(
+    mode = factor(mode, levels = c("Fixed prey index", "Fixed feeding level")),
+    pO2_lab = factor(pO2_lab, levels = c("25 kPa", "10 kPa"))
+  )
+
+ggplot(temp_series, aes(x = T, y = E_net_norm)) +
+  geom_line(aes(linetype = pO2_lab, linewidth = mode), colour = "#67A5CA") +
+  scale_linetype_manual(values = pO2_ltys) +
+  scale_linewidth_manual(values = mode_lw) +
   facet_wrap(~mass_lab, nrow = 1) +
-  scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0, 0.5), expand = c(0, 0)) +
   labs(
     x = "Temperature (°C)",
     y = "E_avail / Cmax",
-    colour = NULL,
+    linetype = "Oxygen",
+    linewidth = NULL,
     title = "Available energy over temperature",
-    subtitle = paste0("Fixed prey index = ", fixed_prey_index, ", fixed feeding level = ", fixed_feeding_level)
+    subtitle = paste0("Fixed prey index = ", fixed_prey_index,
+                      ", fixed feeding level = ", fixed_feeding_level,
+                      " (feeding level shown only at 25 kPa)")
   ) +
   th
 
-limiter_cols <- c(f = "green", g = "purple", U_opt = "#ff8c00")
+# ------------------------------ Plot 2: f and g ------------------------------
+metric_cols <- c(f = "#238b45", g = "#6a51a3", U_opt = "#ff8c00")
 metrics_to_plot <- c("f", "g")
 if (isTRUE(show_U)) metrics_to_plot <- c(metrics_to_plot, "U_opt")
 
+# Encode:
+# - color = metric (f vs g)
+# - linetype = oxygen (25 vs 10 kPa)
+# - linewidth = mode (prey index thicker, feeding level thinner)
+
 temp_series %>%
-  select(T, mass_lab, scenario, all_of(metrics_to_plot)) %>%
-  pivot_longer(cols = all_of(metrics_to_plot), names_to = "metric", values_to = "value") %>%
-  mutate(metric = factor(metric, levels = c("f", "g", "U_opt"))) %>%
-  ggplot(aes(x = T, y = value, colour = metric, linetype = scenario)) +
-  geom_line(linewidth = 0.8) +
-  scale_color_manual(values = limiter_cols[names(limiter_cols) %in% metrics_to_plot]) +
+  dplyr::select(T, mass_lab, mode, pO2_lab, all_of(metrics_to_plot)) %>%
+  tidyr::pivot_longer(cols = all_of(metrics_to_plot), names_to = "metric", values_to = "value") %>%
+  dplyr::mutate(
+    metric = factor(metric, levels = c("f", "g", "U_opt")),
+    mode = factor(mode, levels = c("Fixed prey index", "Fixed feeding level"))
+  ) %>%
+  ggplot(aes(x = T, y = value)) +
+  geom_line(aes(colour = metric, linetype = pO2_lab, linewidth = mode)) +
+  scale_color_manual(values = metric_cols[names(metric_cols) %in% metrics_to_plot]) +
+  scale_linetype_manual(values = pO2_ltys) +
+  scale_linewidth_manual(values = mode_lw) +
   facet_wrap(~mass_lab, nrow = 1) +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
   labs(
     x = "Temperature (°C)", y = "Value",
-    colour = NULL, linetype = NULL,
-    title = "f and g over temperature by scenario",
-    subtitle = "Set show_U = TRUE to include U"
+    colour = NULL, linetype = "Oxygen", linewidth = NULL,
+    title = "f and g over temperature",
+    subtitle = "Colour = metric (f green, g purple); linetype = oxygen; thickness = mode"
   ) +
   th
 ```
+
+## 7 U over prey index
+
+```{r}
+prey_seq <- seq(0, 1, by = 0.002)
+
+scenario_grid <- tidyr::crossing(
+  scenario = c("Baseline", "Hyperthermic", "Hypoxic"),
+  mass = c(1e0, 1e4)
+) %>%
+  dplyr::mutate(
+    mass_lab = factor(mass, levels = c(1e0, 1e4), labels = c("m = 1e0 g", "m = 1e4 g")),
+    lw = dplyr::if_else(mass == 1e0, 0.75, 1.5),
+    T = dplyr::case_when(
+      scenario == "Baseline" ~ 10,
+      scenario == "Hyperthermic" ~ 30,
+      scenario == "Hypoxic" ~ 10
+    ),
+    pO2 = dplyr::case_when(
+      scenario == "Baseline" ~ 25,
+      scenario == "Hyperthermic" ~ 25,
+      scenario == "Hypoxic" ~ 10
+    )
+  )
+
+U_series <- purrr::pmap_dfr(scenario_grid, function(scenario, mass, mass_lab, lw, T, pO2) {
+
+  d <- compute_state_surface(
+    tr,
+    masses = mass,
+    Tseq = T,
+    pO2seq = pO2,
+    preys = prey_seq,
+    prey_units = "prey_index",
+    pair_mode = "cross",
+    progress = TRUE
+  )
+
+  d <- d %>%
+    dplyr::mutate(
+      scenario = scenario,
+      mass_lab = mass_lab,
+      lw = lw,
+      # solid if E_avail > 0 and finite; dashed otherwise
+      E_ok = is.finite(E_net) & (E_net > 0),
+      lty = dplyr::if_else(E_ok, "Positive E_avail", "Negative/NA E_avail")
+    ) %>%
+    dplyr::arrange(f_ref)
+
+  # Split into contiguous segments of constant linetype, per scenario x mass
+  d <- d %>%
+    dplyr::mutate(seg_id = cumsum(dplyr::coalesce(lty != dplyr::lag(lty), TRUE)))
+
+  d
+})
+```
+
+```{r}
+sc_cols <- c(
+  "Baseline" = "gray60",
+  "Hyperthermic" = "#B2182B",
+  "Hypoxic" = "#8A5796"
+)
+
+ggplot(U_series, aes(x = f_ref, y = U_opt)) +
+  geom_line(
+    aes(colour = scenario, linetype = lty, group = interaction(scenario, mass_lab, seg_id), linewidth = lw)
+  ) +
+  scale_color_manual(values = sc_cols) +
+  scale_linetype_manual(values = c("Positive E_avail" = "solid", "Negative/NA E_avail" = "22")) +
+  scale_linewidth_identity(guide = "none") +
+  scale_x_continuous(
+    expand = c(0, 0),
+    breaks = seq(0, 1, by = 0.2),
+    labels = scales::label_number(accuracy = 0.1)
+  ) +
+  scale_y_continuous(expand = c(0, 0)) +
+  labs(
+    x = "Prey index",
+    y = expression(U^"*"),
+    colour = NULL,
+    linetype = NULL,
+    #title = expression("Cruising speed " * U^"* * " over prey index"),
+    #subtitle = "Colour = scenario; thickness = mass (thin 1e0g, thick 1e4g); dashed where E_avail ≤ 0 or NA"
+  ) +
+  th
+```
+
