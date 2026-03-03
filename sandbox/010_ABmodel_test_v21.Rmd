@@ -15,13 +15,11 @@ library(ggh4x)
 # Source scripts (make sure model_functions_ingestion.R + analysis_functions_ingestion.R are updated as we did)
 file_sources <- list.files(here("scripts"), pattern = "*.R$", full.names = TRUE)
 invisible(lapply(file_sources, source))
-```
 
-```{r setup, message=FALSE, warning=FALSE}
 th <- theme_surface_default(base_size = 9, square = TRUE)
 
 tr <- list(
-  a_a = 80, b_R = 1,
+  a_a = 80, b_R = 0.78,
   a_g = 3, hm = 1, b_O = 2/3, K = 2.0, h = 2.0,
   f_m = 0.1, b_m = 0.75,
   a_e = 20, b_e = 2/3,
@@ -144,7 +142,7 @@ plot_fg_bivariate(d_test, x="f_ref", y="pO2",
 plot_surface_masked(d_test, x="f_ref", y="pO2", z="pO2_int",
                     palette="purple", fill_title="Interior oxygen",
                     x_limits=c(0,1), y_limits=c(0,30),
-                    contours="auto",
+                    contours=contour_spec(z="pO2_int", breaks=seq(0,30,5), linewidth=0.22, alpha=1),
                     theme=th) +
   labs(title="Interior oxygen", x="Prey index", y=expression(p[O[2]]~"(kPa)"))
 
@@ -206,6 +204,50 @@ plot_fg_bivariate(d_prey, x="f_ref", y="pO2",
                   contour_fg_mult=FALSE, theme=th) +
   facet_grid2(rows=vars(T_lab), cols=vars(mass_lab)) +
   labs(title="Bivariate limitation mix", x="Prey index", y=expression(p[O[2]]~"(kPa)"))
+```
+
+```{r message=FALSE, warning=FALSE}
+d_prey <- d_prey %>%
+  mutate(
+    # Total aerobic metabolic demand (respired components)
+    M_tot_aero = M_m + M_act + D_SDA,
+
+    # Effective MI using realized supply (dimensionless)
+    MI_eff = if_else(is.finite(O2_supply) & is.finite(M_tot_aero) & M_tot_aero > 0,
+                     O2_supply / M_tot_aero, NA_real_),
+
+    # Optional: MI analogue using environmental pO2 (estimate kO from the run)
+    kO_est = if_else(is.finite(O2_supply) & is.finite(pO2) & is.finite(pO2_int) & (pO2 > pO2_int),
+                     O2_supply / (pO2 - pO2_int), NA_real_),
+    MI_env = if_else(is.finite(kO_est) & is.finite(M_tot_aero) & M_tot_aero > 0,
+                     kO_est * pO2 / M_tot_aero, NA_real_),
+
+    # FAL = total aerobic / basal
+    FAL = if_else(is.finite(M_m) & M_m > 0 & is.finite(M_tot_aero),
+                  M_tot_aero / M_m, NA_real_)
+  )
+
+# MI_env surface
+plot_surface_masked(d_prey, x="f_ref", y="pO2", z="MI_env",
+                    palette="red", fill_title="MI_env (O2_supply / demand)",
+                    x_limits=c(0,1), y_limits=c(0,30),
+                    contours=contour_spec(z="MI_env", breaks=c(1, 2, 3, 4, 5, 6, 7, 8), linewidth=0.22, alpha=1),
+                    theme=th) +
+  facet_grid2(rows=vars(T_lab), cols=vars(mass_lab)) +
+  scale_x_continuous(breaks=seq(0,1,0.2), labels=scales::label_number(accuracy=0.1),
+                     limits=c(0,1), expand=c(0,0)) +
+  labs(title="Effective metabolic index", x="Prey index", y=expression(p[O[2]]~"(kPa)"))
+
+# FAL surface
+plot_surface_masked(d_prey, x="f_ref", y="pO2", z="FAL",
+                    palette="red", fill_title="FAL = (Mm+Ma+SDA)/Mm",
+                    x_limits=c(0,1), y_limits=c(0,30),
+                    contours=contour_spec(z="FAL", breaks=c(1.5, 2, 2.5, 3), linewidth=0.22, alpha=1), 
+                    theme=th) +
+  facet_grid2(rows=vars(T_lab), cols=vars(mass_lab)) +
+  scale_x_continuous(breaks=seq(0,1,0.2), labels=scales::label_number(accuracy=0.1),
+                     limits=c(0,1), expand=c(0,0)) +
+  labs(title="Factorial aerobic load", x="Prey index", y=expression(p[O[2]]~"(kPa)"))
 ```
 
 
@@ -307,7 +349,7 @@ mass_seq <- 10^seq(-3, 5, length.out = 120)
 scen <- tribble(
   ~scenario, ~T, ~pO2, ~f_ref,
   "Baseline", 10, 25, 0.75,
-  "Hyperthermic", 30, 25, 0.75,
+  "Hyperthermic", 20, 25, 0.75,
   "Hypoxic", 10, 10, 0.75,
   "Oligotrophic", 10, 25, 0.50
 )
@@ -373,6 +415,75 @@ alloc_state %>%
   labs(x = "Mass (g)", y = "Limitation", colour = NULL,
        title = "f, g, and f·g across size (aligned by scenario)") +
   th
+
+alloc_state %>%
+  select(scenario, mass, U) %>%
+  pivot_longer(cols = c(U), names_to = "limiter", values_to = "value") %>%
+  mutate(limiter = factor(limiter, levels = c("U"))) %>%
+  ggplot(aes(x = mass, y = value, colour = limiter)) +
+  geom_line(linewidth = 0.8) +
+  scale_color_manual(values = c(U = "black")) +
+  scale_x_log10(
+    breaks = 10^c(-2, 0, 2, 4),
+    labels = label_10pow(),
+    expand = c(0, 0)
+  ) +
+  scale_y_log10(expand = c(0, 0)) +
+  facet_wrap(~scenario, nrow = 1) +
+  labs(x = "Mass (g)", y = "U", colour = NULL,
+       title = "Cruising speed across size (aligned by scenario)") +
+  th
+
+U_scaling <- alloc_state %>%
+  filter(is.finite(U), U > 0, is.finite(mass), mass > 0) %>%
+  group_by(scenario) %>%
+  summarise(
+    n = n(),
+    beta = coef(lm(log10(U) ~ log10(mass)))[["log10(mass)"]],
+    alpha = coef(lm(log10(U) ~ log10(mass)))[["(Intercept)"]],
+    r2 = summary(lm(log10(U) ~ log10(mass)))$r.squared,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    # U = A * m^beta
+    A = 10^alpha
+  )
+
+U_scaling
+
+Mact_scaling <- alloc_state %>%
+  dplyr::filter(is.finite(`Active metabolism`), `Active metabolism` > 0,
+                is.finite(mass), mass > 0) %>%
+  dplyr::group_by(scenario) %>%
+  dplyr::summarise(
+    n = dplyr::n(),
+    beta  = coef(stats::lm(log10(`Active metabolism`) ~ log10(mass)))[["log10(mass)"]],
+    alpha = coef(stats::lm(log10(`Active metabolism`) ~ log10(mass)))[["(Intercept)"]],
+    r2 = summary(stats::lm(log10(`Active metabolism`) ~ log10(mass)))$r.squared,
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(A = 10^alpha)  # so M_act = A * m^beta
+
+Mact_scaling
+
+# Total "metabolism" scaling (as you defined it): M_total = Excretion + SDA + Basal + Active
+Mtot_scaling <- alloc_state %>%
+  dplyr::mutate(
+    M_total = Excretion + SDA + `Basal metabolism` + `Active metabolism`
+  ) %>%
+  dplyr::filter(is.finite(M_total), M_total > 0,
+                is.finite(mass), mass > 0) %>%
+  dplyr::group_by(scenario) %>%
+  dplyr::summarise(
+    n = dplyr::n(),
+    beta  = coef(stats::lm(log10(M_total) ~ log10(mass)))[["log10(mass)"]],
+    alpha = coef(stats::lm(log10(M_total) ~ log10(mass)))[["(Intercept)"]],
+    r2 = summary(stats::lm(log10(M_total) ~ log10(mass)))$r.squared,
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(A = 10^alpha)  # so M_total = A * m^beta
+
+Mtot_scaling
 ```
 
 ```{r metabolic-allocation-2, warning=FALSE}
@@ -446,6 +557,57 @@ alloc_state %>%
   labs(x = "Mass (g)", y = "Limitation", colour = NULL,
        title = "f, g, and f·g across size (aligned by scenario)") +
   th
+
+U_scaling <- alloc_state %>%
+  filter(is.finite(U), U > 0, is.finite(mass), mass > 0) %>%
+  group_by(scenario) %>%
+  summarise(
+    n = n(),
+    beta = coef(lm(log10(U) ~ log10(mass)))[["log10(mass)"]],
+    alpha = coef(lm(log10(U) ~ log10(mass)))[["(Intercept)"]],
+    r2 = summary(lm(log10(U) ~ log10(mass)))$r.squared,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    # U = A * m^beta
+    A = 10^alpha
+  )
+
+U_scaling
+
+Mact_scaling <- alloc_state %>%
+  dplyr::filter(is.finite(`Active metabolism`), `Active metabolism` > 0,
+                is.finite(mass), mass > 0) %>%
+  dplyr::group_by(scenario) %>%
+  dplyr::summarise(
+    n = dplyr::n(),
+    beta  = coef(stats::lm(log10(`Active metabolism`) ~ log10(mass)))[["log10(mass)"]],
+    alpha = coef(stats::lm(log10(`Active metabolism`) ~ log10(mass)))[["(Intercept)"]],
+    r2 = summary(stats::lm(log10(`Active metabolism`) ~ log10(mass)))$r.squared,
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(A = 10^alpha)  # so M_act = A * m^beta
+
+Mact_scaling
+
+# Total "metabolism" scaling (as you defined it): M_total = Excretion + SDA + Basal + Active
+Mtot_scaling <- alloc_state %>%
+  dplyr::mutate(
+    M_total = Excretion + SDA + `Basal metabolism` + `Active metabolism`
+  ) %>%
+  dplyr::filter(is.finite(M_total), M_total > 0,
+                is.finite(mass), mass > 0) %>%
+  dplyr::group_by(scenario) %>%
+  dplyr::summarise(
+    n = dplyr::n(),
+    beta  = coef(stats::lm(log10(M_total) ~ log10(mass)))[["log10(mass)"]],
+    alpha = coef(stats::lm(log10(M_total) ~ log10(mass)))[["(Intercept)"]],
+    r2 = summary(stats::lm(log10(M_total) ~ log10(mass)))$r.squared,
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(A = 10^alpha)  # so M_total = A * m^beta
+
+Mtot_scaling
 ```
 
 ## 6) E_avail over temperature: prey index vs feeding level
@@ -541,7 +703,7 @@ temp_series %>%
   scale_linewidth_manual(values = mode_lw) +
   facet_wrap(~mass_lab, nrow = 1) +
   scale_x_continuous(expand = c(0, 0)) +
-  scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  scale_y_continuous(breaks=c(0.0, 0.2, 0.4, 0.6, 0.8, 1.0), limits = c(0, 1), expand = c(0, 0)) +
   labs(
     x = "Temperature (°C)", y = "Value",
     colour = NULL, linetype = "Oxygen", linewidth = NULL,
