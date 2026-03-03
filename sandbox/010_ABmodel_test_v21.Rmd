@@ -19,14 +19,41 @@ invisible(lapply(file_sources, source))
 th <- theme_surface_default(base_size = 9, square = TRUE)
 
 tr <- list(
-  a_a = 80, b_R = 0.78,
-  a_g = 3, hm = 1, b_O = 2/3, K = 2.0, h = 2.0,
-  f_m = 0.1, b_m = 0.75,
-  a_e = 20, b_e = 2/3,
-  a_c = 60, b_c = 0.75,
-  a_SDA = 0.2, a_exc = 0.1,
+  # --- Activity metabolism ---
+  a_A = 80,
+  b_R = 0.78,
+
+  # --- Oxygen supply ---
+  a_O = 3,
+  b_d = 0.75,
+  b_v = 0.15,
+
+  # --- Hill kinetics ---
+  K_g = 2.0,
+  h_g = 2.0,
+
+  # --- Encounter ---
+  a_E = 20,
+  b_E = 2 / 3,
+
+  # --- Processing ---
+  a_C = 60,
+  b_C = 0.75,
+
+  # --- Maintenance ---
+  alpha_M = 0.1,
+  b_M = 0.75,
+
+  # --- Intake partition fractions ---
+  alpha_SDA = 0.2,
+  alpha_exc = 0.1,
+
+  # --- Temperature (Arrhenius default) ---
   T_ref = 10,
-  Q10_c = 2.00, Q10_m = 2.00, Q10_a = 1.00, Q10_o = 1.50
+  E_M = 0.50,
+  E_C = 0.50,
+  E_A = 0.30,
+  E_O = 0.25
 )
 
 pO2seq <- seq(0, 30, by = 0.1)
@@ -355,11 +382,11 @@ scen <- tribble(
 )
 
 alloc_state <- purrr::pmap_dfr(scen, function(scenario, T, pO2, f_ref) {
-  B_vec <- B_from_f(f_ref = rep(f_ref, length(mass_seq)), m = mass_seq, tr = tr,
+  B_vec <- B_from_f(f_ref = rep(f_ref, length(mass_seq)), w = mass_seq, tr = tr,
                     T_ref = rep(10, length(mass_seq)), pO2_ref = rep(25, length(mass_seq)),
                     U_lo = 1e-5, U_mech = 5, enforce_O2_feasible = TRUE)
   purrr::map2_dfr(mass_seq, B_vec, function(m, B) {
-    st <- find_U_opt(pO2_env = pO2, T = T, m = m, prey = B, tr = tr, U_lo = 1e-5, U_mech = 5)
+    st <- find_U_opt(pO2_env = pO2, T = T, w = m, prey = B, tr = tr, U_lo = 1e-5, U_mech = 5)
     tibble(
       scenario = scenario,
       mass = m,
@@ -497,11 +524,11 @@ scen <- tribble(
 )
 
 alloc_state <- purrr::pmap_dfr(scen, function(scenario, T, pO2, f_ref) {
-  B_vec <- B_from_f(f_ref = rep(f_ref, length(mass_seq)), m = mass_seq, tr = tr,
+  B_vec <- B_from_f(f_ref = rep(f_ref, length(mass_seq)), w = mass_seq, tr = tr,
                     T_ref = rep(10, length(mass_seq)), pO2_ref = rep(25, length(mass_seq)),
                     U_lo = 1e-5, U_mech = 5, enforce_O2_feasible = TRUE)
   purrr::map2_dfr(mass_seq, B_vec, function(m, B) {
-    st <- find_U_opt(pO2_env = pO2, T = T, m = m, prey = B, tr = tr, U_lo = 1e-5, U_mech = 5)
+    st <- find_U_opt(pO2_env = pO2, T = T, w = m, prey = B, tr = tr, U_lo = 1e-5, U_mech = 5)
     tibble(
       scenario = scenario,
       mass = m,

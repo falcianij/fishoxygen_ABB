@@ -16,9 +16,9 @@ compute_state_surface <- function(tr,
                                   preys = NULL,
                                   intercepts = 1.6,
                                   slopes = -0.08,
-                                  m0 = 1,
+                                  w0 = 1,
                                   pair_mode = c("auto", "cross", "zip"),
-                                  normalize_E = TRUE,
+                                  normalize_nu = TRUE,
                                   progress = TRUE,
                                   T_ref = tr$T_ref,
                                   pO2_ref = 25,
@@ -68,8 +68,8 @@ compute_state_surface <- function(tr,
   # ----------------------- caching for B_from_f -----------------------
   cache <- new.env(parent = emptyenv())
   
-  key_pi <- function(m, f_ref) {
-    paste0("pi|m=", signif(m, 12),
+  key_pi <- function(w, f_ref) {
+    paste0("pi|m=", signif(w, 12),
            "|f=", signif(f_ref, 12),
            "|Tref=", signif(T_ref, 12),
            "|pO2ref=", signif(pO2_ref, 12),
@@ -79,8 +79,8 @@ compute_state_surface <- function(tr,
            "|uprey=", signif(u_prey, 12),
            "|D=", D)
   }
-  key_fl <- function(m, f_ref, Tval) {
-    paste0("fl|m=", signif(m, 12),
+  key_fl <- function(w, f_ref, Tval) {
+    paste0("fl|m=", signif(w, 12),
            "|f=", signif(f_ref, 12),
            "|T=", signif(Tval, 12),
            "|pO2ref=", signif(pO2_ref, 12),
@@ -91,10 +91,10 @@ compute_state_surface <- function(tr,
            "|D=", D)
   }
   
-  get_B_prey_index <- function(m, f_ref) {
-    k <- key_pi(m, f_ref)
+  get_B_prey_index <- function(w, f_ref) {
+    k <- key_pi(w, f_ref)
     if (exists(k, envir = cache, inherits = FALSE)) return(get(k, envir = cache, inherits = FALSE))
-    B <- B_from_f(f_ref = f_ref, m = m, tr = tr,
+    B <- B_from_f(f_ref = f_ref, w = w, tr = tr,
                   T_ref = T_ref, pO2_ref = pO2_ref,
                   U_lo = U_lo, U_mech = U_mech,
                   enforce_O2_feasible = enforce_O2_feasible,
@@ -103,10 +103,10 @@ compute_state_surface <- function(tr,
     B
   }
   
-  get_B_feeding_level <- function(m, f_ref, Tval) {
-    k <- key_fl(m, f_ref, Tval)
+  get_B_feeding_level <- function(w, f_ref, Tval) {
+    k <- key_fl(w, f_ref, Tval)
     if (exists(k, envir = cache, inherits = FALSE)) return(get(k, envir = cache, inherits = FALSE))
-    B <- B_from_f(f_ref = f_ref, m = m, tr = tr,
+    B <- B_from_f(f_ref = f_ref, w = w, tr = tr,
                   T_ref = Tval, pO2_ref = pO2_ref,
                   U_lo = U_lo, U_mech = U_mech,
                   enforce_O2_feasible = enforce_O2_feasible,
@@ -124,7 +124,7 @@ compute_state_surface <- function(tr,
   blocks <- vector("list", nrow(spec))
   
   for (i in seq_len(nrow(spec))) {
-    m <- spec$mass[i]
+    w <- spec$mass[i]
     grid <- tidyr::expand_grid(T = Tseq, pO2 = pO2seq)
     
     if (prey_units == "biomass") {
@@ -138,16 +138,16 @@ compute_state_surface <- function(tr,
       f_ref_out <- spec$prey_arg[i]
       
       if (prey_units == "prey_index") {
-        B_const <- get_B_prey_index(m, f_ref)
+        B_const <- get_B_prey_index(w, f_ref)
         B_lookup <- NULL
       } else {
-        B_vec <- vapply(Tseq, function(Tval) get_B_feeding_level(m, f_ref, Tval), numeric(1))
+        B_vec <- vapply(Tseq, function(Tval) get_B_feeding_level(w, f_ref, Tval), numeric(1))
         B_lookup <- B_vec
         B_const <- NA_real_
       }
     } else {
       B_mode <- "powerlaw"
-      B_const <- B_from_powerlaw_spectrum(m, spec$intercept[i], spec$slope[i], m0 = m0)
+      B_const <- B_from_powerlaw_spectrum(w, spec$intercept[i], spec$slope[i], w0 = w0)
       f_ref_out <- NA_real_
       B_lookup <- NULL
     }
@@ -164,21 +164,21 @@ compute_state_surface <- function(tr,
         B_const
       }
       
-      st <- find_U_opt(pO2_env = pO2v, T = Tval, m = m, prey = B_used, tr = tr,
+      st <- find_U_opt(pO2_env = pO2v, T = Tval, w = w, prey = B_used, tr = tr,
                        u_prey = u_prey, D = D, U_lo = U_lo, U_mech = U_mech)
       
       c(B_used = B_used, f_ref = f_ref_out,
-        U_opt = st$U_opt, E_net = st$E_net, Cmax = st$Cmax,
+        U_opt = st$U_opt, nu_net = st$nu_net, E_net = st$E_net, Cmax = st$Cmax,
         Enc = st$Enc, C_pot = st$C_pot, C_real = st$C_real, I = st$I,
         f = st$f, g = st$g, pO2_int = st$pO2_int,
-        consump = st$consump, A_assim = st$A_assim,
+        nu_gain = st$nu_gain, consump = st$consump, A_assim = st$A_assim,
         M_m = st$M_m, M_act = st$M_act, D_SDA = st$D_SDA, M_exc = st$M_exc,
         O2_supply = st$O2_supply, O2_demand = st$O2_demand, O2_margin = st$O2_margin,
         oxygen_exclusion = as.numeric(st$oxygen_exclusion),
         energetic_exclusion = as.numeric(st$energetic_exclusion))
     })
     
-    blk <- dplyr::bind_cols(tibble::tibble(mass = m), grid, as.data.frame(t(rr)))
+    blk <- dplyr::bind_cols(tibble::tibble(mass = w), grid, as.data.frame(t(rr)))
     blocks[[i]] <- blk
     
     if (isTRUE(progress)) utils::setTxtProgressBar(pb, i)
@@ -186,8 +186,9 @@ compute_state_surface <- function(tr,
   
   res <- dplyr::bind_rows(blocks)
   
-  if (isTRUE(normalize_E)) {
+  if (isTRUE(normalize_nu)) {
     res <- dplyr::mutate(res,
+                         nu_net_norm = dplyr::if_else(is.finite(nu_net) & is.finite(Cmax) & Cmax != 0, nu_net / Cmax, NA_real_),
                          E_net_norm = dplyr::if_else(is.finite(E_net) & is.finite(Cmax) & Cmax != 0, E_net / Cmax, NA_real_),
                          proc_real_frac = dplyr::if_else(is.finite(C_real) & is.finite(C_pot) & C_pot != 0, C_real / C_pot, NA_real_)
     )

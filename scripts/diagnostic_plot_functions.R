@@ -9,7 +9,7 @@
 #     * f = Enc/(Enc + Cmax)  (encounter saturation)
 #     * g = Hill(pO2_int)
 #     * proc_real_frac = C_real/C_pot  (equals g in current model)
-#     * D_SDA = a_SDA*C_real, M_exc = a_exc*C_real, A_assim=(1-a_SDA-a_exc)*C_real
+#     * D_SDA = alpha_SDA*C_real, M_exc = alpha_exc*C_real, nu_gain=(1-alpha_SDA-alpha_exc)*C_real
 #     * B_from_f inverts the full model (optimized U + O2 closure)
 # -------------------------------------------------------------------
 
@@ -145,7 +145,7 @@ contour_spec <- function(z,
 default_contours <- function(zname) {
   if (identical(zname, "f") || identical(zname, "g")) {
     contour_spec(z = zname, breaks = seq(0, 1, by = 0.2), linewidth = 0.25, alpha = 0.9)
-  } else if (identical(zname, "E_net_norm")) {
+  } else if (identical(zname, "nu_net_norm")) {
     contour_spec(z = zname, breaks = seq(0, 1, by = 0.1), linewidth = 0.25, alpha = 0.9)
   } else {
     contour_spec(z = zname, bins = 5, linewidth = 0.25, alpha = 0.7)
@@ -293,19 +293,19 @@ plot_surface_masked <- function(df, x, y, z,
 
 # --------------------------- Convenience diagnostics ---------------------------
 
-# "available energy" uses E_net_norm with NA/neg/pos handling; now just a thin wrapper.
+# "available energy" uses nu_net_norm with NA/neg/pos handling; now just a thin wrapper.
 plot_available_energy <- function(df, x = c("B_used", "f_ref", "T"), y = "pO2",
                                   contours = "auto",
                                   ...) {
   x <- match.arg(x)
-  plot_surface_masked(df, x = x, y = y, z = "E_net_norm",
-                      palette = "blue", fill_title = "E/Cmax",
+  plot_surface_masked(df, x = x, y = y, z = "nu_net_norm",
+                      palette = "blue", fill_title = "nu/Cmax",
                       contours = contours,
                       ...) +
     labs(x = x, y = y, title = "Available energy (masked)")
 }
 
-# Metabolic allocation facets (uses updated names: M_m, M_act, D_SDA, A_assim, M_exc)
+# Metabolic allocation facets (uses updated names: M_m, M_act, D_SDA, nu_gain, M_exc)
 plot_metabolic_allocation <- function(df, x = c("B_used", "f_ref", "T"), y = "pO2",
                                       interpolate = TRUE, nx = 300, ny = 300,
                                       facet_scales = "free",
@@ -318,7 +318,7 @@ plot_metabolic_allocation <- function(df, x = c("B_used", "f_ref", "T"), y = "pO
               Activity = M_act,
               SDA = D_SDA,
               Excretion = M_exc,
-              Assimilation = A_assim) %>%
+              Assimilation = nu_gain) %>%
     pivot_longer(cols = c(Maintenance, Activity, SDA, Excretion, Assimilation),
                  names_to = "process", values_to = "value")
   
