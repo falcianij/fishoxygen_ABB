@@ -4,7 +4,7 @@ output: html_document
 date: "`r Sys.Date()`"
 ---
 
-## 0) Initialization
+# 0) Initialization
 
 ```{r setup, message=FALSE, warning=FALSE}
 library(here)
@@ -24,7 +24,7 @@ tr <- list(
   b_R = 0.78,
 
   # --- Oxygen supply ---
-  a_O = 3,
+  a_O = 5,
   b_d = 0.75,
   b_v = 0.15,
 
@@ -52,7 +52,7 @@ tr <- list(
   T_ref = 10,
   E_M = 0.50,
   E_C = 0.50,
-  E_A = 0.30,
+  E_A = 0.10,
   E_O = 0.25
 )
 
@@ -60,7 +60,7 @@ pO2seq <- seq(0, 30, by = 0.1)
 ```
 
 
-## 1) Test diagnostics (single mass/temperature): pO2 vs prey index
+# 1) Test diagnostics (single mass/temperature): pO2 vs prey index
 
 ```{r}
 d_test <- compute_state_surface(
@@ -190,7 +190,7 @@ plot_surface_masked(d_test2, x="f_ref", y="pO2", z="logB",
 ```
 
 
-## 2) pO2 vs prey density (four separate 4-panel plots)
+# 2) pO2 vs prey density (four separate 4-panel plots)
 
 ```{r}
 d_prey <- compute_state_surface(
@@ -278,7 +278,7 @@ plot_surface_masked(d_prey, x="f_ref", y="pO2", z="FAL",
 ```
 
 
-## 3) Feeding level: pO2 vs temperature (four separate 4-panel plots)
+# 3) Feeding level: pO2 vs temperature (four separate 4-panel plots)
 
 ```{r}
 d_temp_fl <- compute_state_surface(
@@ -317,13 +317,13 @@ plot_surface_masked(d_temp_fl, x="T", y="pO2", z="U_opt",
 # Bivariate limitation
 plot_fg_bivariate(d_temp_fl, x="T", y="pO2",
                   x_limits=c(0,30), y_limits=c(0,30),
-                  contour_fg_mult=FALSE, theme=th) +
+                  contour_fg_mult=TRUE, theme=th) +
   facet_grid2(rows=vars(f_lab), cols=vars(mass_lab)) +
   labs(title="Bivariate limitation mix", x="Temperature (°C)", y=expression(p[O[2]]~"(kPa)"))
 ```
 
 
-## 4) Prey index: pO2 vs temperature (four separate 4-panel plots)
+# 4) Prey index: pO2 vs temperature (four separate 4-panel plots)
 
 ```{r}
 d_temp_fl <- compute_state_surface(
@@ -363,20 +363,20 @@ plot_surface_masked(d_temp_fl, x="T", y="pO2", z="U_opt",
 # Bivariate limitation
 plot_fg_bivariate(d_temp_fl, x="T", y="pO2",
                   x_limits=c(0,30), y_limits=c(0,30),
-                  contour_fg_mult=FALSE, theme=th) +
+                  contour_fg_mult=TRUE, theme=th) +
   facet_grid2(rows=vars(f_lab), cols=vars(mass_lab)) +
   labs(title="Bivariate limitation mix", x="Temperature (°C)", y=expression(p[O[2]]~"(kPa)"))
 ```
 
 
-## 5) Metabolic allocation (stacked; explicit excretion)
+# 5) Metabolic allocation (stacked; explicit excretion)
 
 ```{r metabolic-allocation}
 mass_seq <- 10^seq(-3, 5, length.out = 120)
 scen <- tribble(
   ~scenario, ~T, ~pO2, ~f_ref,
   "Baseline", 10, 25, 0.75,
-  "Hyperthermic", 20, 25, 0.75,
+  "Hyperthermic", 25, 25, 0.75,
   "Hypoxic", 10, 10, 0.75,
   "Oligotrophic", 10, 25, 0.50
 )
@@ -517,10 +517,11 @@ Mtot_scaling
 mass_seq <- 10^seq(-3, 5, length.out = 120)
 scen <- tribble(
   ~scenario, ~T, ~pO2, ~f_ref,
-  "Baseline", 10, 25, 0.75,
-  "Hyperthermic + Hypoxic", 20, 10, 0.75,
+  #"Baseline", 10, 25, 0.75,
+  "Hyperthermic + Hypoxic", 25, 10, 0.75,
   "Hypoxic + Oligotrophic", 10, 10, 0.50,
-  "Oligotrophic + Hyperthermic", 20, 25, 0.50
+  "Oligotrophic + Hyperthermic", 25, 25, 0.50,
+  "Oligotrophic + Hyperthermic + \nHypoxic", 25, 10, 0.50
 )
 
 alloc_state <- purrr::pmap_dfr(scen, function(scenario, T, pO2, f_ref) {
@@ -637,7 +638,7 @@ Mtot_scaling <- alloc_state %>%
 Mtot_scaling
 ```
 
-## 6) E_avail over temperature: prey index vs feeding level
+# 6) E_avail over temperature: prey index vs feeding level
 
 ```{r message=FALSE, warning=FALSE}
 T_seq <- seq(0, 30, by = 0.25)
@@ -740,7 +741,7 @@ temp_series %>%
   th
 ```
 
-## 7 U over prey index
+# 7) U over prey index
 
 ```{r}
 prey_seq <- seq(0, 1, by = 0.002)
@@ -825,5 +826,117 @@ ggplot(U_series, aes(x = f_ref, y = U_opt)) +
     #subtitle = "Colour = scenario; thickness = mass (thin 1e0g, thick 1e4g); dashed where E_avail ≤ 0 or NA"
   ) +
   th
+```
+
+
+# 8) Minimum pO2 mass-scaling analysis
+
+```{r}
+find_zero_crossing <- function(x, y) {
+  ok <- is.finite(x) & is.finite(y)
+  x <- x[ok]; y <- y[ok]
+  if (length(x) < 2) return(NA_real_)
+
+  o <- order(x)
+  x <- x[o]; y <- y[o]
+
+  # exact zero
+  iz <- which(y == 0)
+  if (length(iz) > 0) return(x[min(iz)])
+
+  s <- sign(y)
+  idx <- which(s[-length(s)] * s[-1] < 0)
+  if (length(idx) == 0) return(NA_real_)
+
+  i <- idx[1]
+  x1 <- x[i]; x2 <- x[i+1]
+  y1 <- y[i]; y2 <- y[i+1]
+  x1 + (0 - y1) * (x2 - x1) / (y2 - y1)
+}
+```
+
+```{r}
+mass_seq <- 10^seq(0, 6, by = 1)   # 1e0 to 1e6
+pO2_seq  <- seq(0, 30, by = 0.1)
+
+f_ref_use <- 0.75   # prey index OR feeding level target
+
+d_slice <- compute_state_surface(
+  tr,
+  masses = mass_seq,
+  Tseq   = 10,
+  pO2seq = pO2_seq,
+  preys  = f_ref_use,
+  prey_units = "prey_index",   # or "feeding_level"
+  pair_mode = "cross",
+  progress = TRUE
+)
+```
+
+```{r}
+thr_mass <- d_slice %>%
+  mutate(
+    SD_margin = O2_supply - O2_demand
+  ) %>%
+  group_by(mass) %>%
+  summarise(
+    pO2_E0 = find_zero_crossing(pO2, E_net),
+    pO2_SD = find_zero_crossing(pO2, SD_margin),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    # keep copies in log space for fits/plots if useful
+    logm = log10(mass),
+    log_pO2_E0 = if_else(is.finite(pO2_E0) & pO2_E0 > 0, log10(pO2_E0), NA_real_),
+    log_pO2_SD = if_else(is.finite(pO2_SD) & pO2_SD > 0, log10(pO2_SD), NA_real_)
+  )
+
+thr_mass
+```
+
+```{r}
+thr_long <- thr_mass %>%
+  pivot_longer(cols = c(pO2_E0, pO2_SD),
+               names_to = "threshold", values_to = "pO2_thr") %>%
+  mutate(threshold = recode(threshold,
+                            pO2_E0 = "E_net = 0",
+                            pO2_SD = "O2 supply = demand"))
+
+ggplot(thr_long, aes(x = mass, y = pO2_thr, colour = threshold)) +
+  geom_line(linewidth = 0.9, na.rm = TRUE) +
+  geom_point(size = 1.6, na.rm = TRUE) +
+  scale_x_log10(breaks = 10^(0:6), labels = label_10pow(), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0, 30), expand = c(0, 0)) +
+  labs(x = "Mass (g)", y = expression(p[O[2]]~"threshold (kPa)"),
+       colour = NULL,
+       title = "pO2 thresholds vs mass at 10°C",
+       subtitle = paste0("Prey setting: ", f_ref_use, " (", "prey_units = prey_index", ")")) +
+  th
+```
+
+```{r}
+# Fit: log10(pO2_thr) ~ alpha + beta*log10(mass)
+fit_scaling <- function(df, ycol) {
+  d <- df %>%
+    filter(is.finite(.data[[ycol]]), .data[[ycol]] > 0, is.finite(mass), mass > 0) %>%
+    mutate(logy = log10(.data[[ycol]]), logm = log10(mass))
+
+  if (nrow(d) < 3) return(tibble(n = nrow(d), alpha = NA_real_, beta = NA_real_, r2 = NA_real_, A = NA_real_))
+
+  fit <- lm(logy ~ logm, data = d)
+  co <- coef(fit)
+  tibble(
+    n = nrow(d),
+    alpha = unname(co[1]),
+    beta  = unname(co[2]),
+    r2 = summary(fit)$r.squared,
+    A = 10^unname(co[1])
+  )
+}
+
+scaling_E0 <- fit_scaling(thr_mass, "pO2_E0") %>% mutate(threshold = "E_net = 0")
+scaling_SD <- fit_scaling(thr_mass, "pO2_SD") %>% mutate(threshold = "O2 supply = demand")
+
+bind_rows(scaling_E0, scaling_SD)
 ```
 

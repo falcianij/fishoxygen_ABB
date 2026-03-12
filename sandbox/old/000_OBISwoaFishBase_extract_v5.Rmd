@@ -1,0 +1,750 @@
+---
+title: "000_OBISwoaFishBase_extract_v5"
+output: html_document
+date: "2026-03-03"
+---
+
+```{r}
+library(tidyverse)
+library(here)
+library(rfishbase)
+library(robis)
+library(future.apply)
+
+# Source scripts (make sure model_functions_ingestion.R + analysis_functions_ingestion.R are updated as we did)
+file_sources <- list.files(here("scripts"), pattern = "*.R$", full.names = TRUE)
+invisible(lapply(file_sources, source))
+
+th <- theme_surface_default(base_size = 9, square = TRUE)
+```
+
+
+# 0) Configuration
+
+```{r}
+LOCAL_PATH <- "/../environment/"     # adjust to your layout
+PATH <- paste0(here(), LOCAL_PATH)
+
+WOA_PO2_FILE  <- paste0(PATH, "data_out/woa18_all_pO2_kPa_an01.csv")  # pO2 in kPa
+WOA_TEMP_FILE <- paste0(PATH, "data/woa18_95A4_t00an01.csv")          # temperature in °C
+
+# Penn-style tolerances
+T_TOL_C     <- 2.0    # discard if temp varies >2°C across depth interval around central estimate
+O2_TOL_FRAC <- 0.20   # discard if pO2 varies >20% across depth interval around central estimate
+
+# FishBase DemersPelag groupings (first pass)
+labels_epipelagic <- c("pelagic", "pelagic-neritic", "pelagic-oceanic")
+labels_demersal   <- c("demersal", "bathydemersal")
+
+# OBIS parallelism
+plan(multisession, workers = 64)     # tune to your machine / environment
+
+# Dummy L-W conversion (FishBase Length -> mass proxy)
+a_dummy <- 0.010
+b_dummy <- 3.00
+
+# Safety bounds for decade centers (k in [-10,10])
+K_FLOOR <- -10
+K_CEIL  <-  10
+
+# Output
+dir.create(here("figs"), showWarnings = FALSE, recursive = TRUE)
+dir.create(here("data"), showWarnings = FALSE, recursive = TRUE)
+```
+
+
+# 1) Function helpers
+
+```{r}
+snap_1deg_center <- function(x) round(x / 1) * 1 + 0.5
+
+woa_wide_to_long <- function(df, value_name) {
+  df %>%
+    pivot_longer(starts_with("X"), names_to = "depth_m", values_to = value_name) %>%
+    mutate(depth_m = as.numeric(sub("^X", "", depth_m)))
+}
+
+# Size bins centered on 10^k where k is integer:
+# bin k is [10^(k-0.5), 10^(k+0.5))
+make_decade_centered_bins <- function(mass_g, k_floor = -10, k_ceiling = 10) {
+  lg <- log10(mass_g)
+  lg <- lg[is.finite(lg)]
+
+  if (length(lg) == 0) {
+    k_min <- k_floor
+    k_max <- k_ceiling
+  } else {
+    k_min <- floor(min(lg))
+    k_max <- ceiling(max(lg))
+    k_min <- max(k_min, k_floor)
+    k_max <- min(k_max, k_ceiling)
+  }
+
+  ks <- seq(k_min, k_max, by = 1)
+  edges <- 10^seq(k_min - 0.5, k_max + 0.5, by = 1)
+
+  list(
+    k = ks,
+    breaks = edges,
+    centers_g = 10^ks,
+    labels = paste0("10^", ks, " g")
+  )
+}
+
+get_fishbase_species <- function(labels, group_name) {
+  fb_tbl("species") %>%
+    transmute(
+      sci_name = paste(Genus, Species),
+      DemersPelag,
+      Length,
+      Saltwater
+    ) %>%
+    filter(Saltwater == 1, DemersPelag %in% labels) %>%
+    mutate(
+      mass_g = a_dummy * Length^b_dummy,
+      group  = group_name
+    ) %>%
+    filter(is.finite(mass_g)) %>%
+    distinct(sci_name, .keep_all = TRUE)
+}
+
+get_obis_one <- function(species) {
+  tryCatch({
+    x <- occurrence(species)
+    if (!is.null(x) && nrow(x) > 0) x %>% mutate(sci_name = species) else NULL
+  }, error = function(e) NULL)
+}
+
+fetch_obis <- function(species_vec) {
+  obis_list <- future_lapply(species_vec, get_obis_one)
+  data <- bind_rows(obis_list)
+  missing <- species_vec[which(vapply(obis_list, is.null, logical(1)))]
+  list(data = data, missing = missing)
+}
+
+# Evaluate uncertainty of T and pO2 within [zmin,zmax] relative to the central estimate at midpoint depth
+eval_depth_uncertainty <- function(profile_df, zmin, zmax, T_tol = 2, O2_tol_frac = 0.2) {
+  if (nrow(profile_df) == 0) return(NULL)
+
+  pr <- profile_df %>%
+    filter(depth_m >= zmin, depth_m <= zmax) %>%
+    filter(is.finite(temperature), is.finite(po2_kPa))
+
+  if (nrow(pr) == 0) return(NULL)
+
+  zc <- (zmin + zmax) / 2
+
+  # Central estimate at nearest WOA depth to midpoint
+  pr <- pr %>%
+    mutate(dist = abs(depth_m - zc)) %>%
+    arrange(dist)
+
+  T0  <- pr$temperature[1]
+  O20 <- pr$po2_kPa[1]
+
+  dT  <- max(abs(pr$temperature - T0), na.rm = TRUE)
+  dO2 <- max(abs(pr$po2_kPa - O20) / pmax(O20, 1e-9), na.rm = TRUE)
+
+  tibble(
+    central_depth_m = pr$depth_m[1],
+    temperature = T0,
+    po2_kPa = O20,
+    dT_max = dT,
+    dO2_max_frac = dO2,
+    pass_uncertainty = (dT <= T_tol) & (dO2 <= O2_tol_frac)
+  )
+}
+```
+
+
+# 2) Load WOA and reshape
+
+```{r}
+woa_temp <- read.csv(WOA_TEMP_FILE)
+woa_po2  <- read.csv(WOA_PO2_FILE)
+
+woa_temp_long <- woa_wide_to_long(woa_temp, "temperature")
+woa_po2_long  <- woa_wide_to_long(woa_po2,  "po2_kPa")
+
+woa_long <- full_join(woa_temp_long, woa_po2_long,
+                      by = c("LATITUDE", "LONGITUDE", "depth_m"))
+
+# Ensure WOA has at most one row per (cell, depth). If duplicates exist, collapse them.
+woa_long <- woa_long %>%
+  group_by(LATITUDE, LONGITUDE, depth_m) %>%
+  summarize(
+    temperature = mean(temperature, na.rm = TRUE),
+    po2_kPa     = mean(po2_kPa,     na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Make a fast lookup list: one profile per (LATITUDE, LONGITUDE)
+woa_groups <- woa_long %>% group_by(LATITUDE, LONGITUDE) %>% group_split()
+woa_keys   <- woa_long %>% group_by(LATITUDE, LONGITUDE) %>% group_keys()
+woa_profiles <- setNames(
+  woa_groups,
+  paste0(woa_keys$LATITUDE, "_", woa_keys$LONGITUDE)
+)
+get_profile <- function(lat, lon) woa_profiles[[paste0(lat, "_", lon)]]
+
+# Precompute "seafloor" depth: deepest depth with any finite env for each WOA cell
+woa_seafloor <- woa_long %>%
+  filter(is.finite(temperature) | is.finite(po2_kPa)) %>%
+  group_by(LATITUDE, LONGITUDE) %>%
+  summarize(zfloor = max(depth_m, na.rm = TRUE), .groups = "drop")
+```
+
+
+# 3) FishBase species list
+
+```{r}
+# Epipelagic + demersal example
+fb_epi <- get_fishbase_species(labels_epipelagic, "epipelagic")
+fb_dem <- get_fishbase_species(labels_demersal,   "demersal")
+
+fb_all <- bind_rows(fb_epi, fb_dem) %>%
+  distinct(sci_name, .keep_all = TRUE)
+
+# Decade-centered mass bins shared across both groups
+bins <- make_decade_centered_bins(fb_all$mass_g, k_floor = K_FLOOR, k_ceiling = K_CEIL)
+
+fb_all <- fb_all %>%
+  mutate(
+    mass_bin = cut(
+      mass_g,
+      breaks = bins$breaks,
+      include.lowest = TRUE,
+      right = FALSE,
+      labels = bins$labels
+    )
+  )
+
+sp_lookup <- fb_all %>% select(sci_name, group, mass_g, mass_bin)
+```
+
+
+# 4) OBIS occurrences
+
+```{r}
+res_obis <- fetch_obis(sp_lookup$sci_name)
+writeLines(res_obis$missing, here("data/missing_species.txt"))
+
+obis <- res_obis$data %>%
+  transmute(
+    sci_name = if_else(is.na(sci_name), scientificName, sci_name),
+    LATITUDE = decimalLatitude,
+    LONGITUDE = decimalLongitude,
+    zmin = as.numeric(minimumDepthInMeters),
+    zmax = as.numeric(maximumDepthInMeters)
+  ) %>%
+  filter(is.finite(LATITUDE), is.finite(LONGITUDE)) %>%
+  left_join(sp_lookup, by = "sci_name") %>%
+  filter(!is.na(group), !is.na(mass_bin))
+
+# Snap to 1° WOA grid centers
+obis <- obis %>%
+  mutate(
+    LATITUDE = snap_1deg_center(LATITUDE),
+    LONGITUDE = snap_1deg_center(LONGITUDE)
+  )
+```
+
+
+# 5) Processing and joining
+
+```{r}
+# ---------------------------
+# Depth rules (Penn-like)
+#    - If only one of zmin/zmax present: set the other equal
+#    - If neither present: use 0 -> seafloor, but only if WOA cell exists
+# ---------------------------
+obis2 <- obis %>%
+  mutate(
+    zmin = as.numeric(zmin),
+    zmax = as.numeric(zmax),
+    zmin = if_else(is.na(zmin) & !is.na(zmax), zmax, zmin),
+    zmax = if_else(is.na(zmax) & !is.na(zmin), zmin, zmax)
+  ) %>%
+  left_join(woa_seafloor, by = c("LATITUDE", "LONGITUDE")) %>%
+  mutate(
+    zmin = if_else(is.na(zmin) & is.na(zmax), 0, zmin),
+    zmax = if_else(is.na(zmax) & is.na(zmin), zfloor, zmax)
+  ) %>%
+  select(-zfloor) %>%
+  filter(is.finite(zmin), is.finite(zmax), zmax >= zmin)
+```
+
+
+```{r}
+# ---------------------------
+# OPTIONAL SPEEDUP (recommended):
+#    Deduplicate "environment queries" so you only evaluate WOA once per unique key.
+#    Key choice: (LAT, LON, zmin, zmax, group, mass_bin)
+#    If you want env to depend ONLY on (LAT,LON,zmin,zmax), drop group/mass_bin from distinct().
+# ---------------------------
+obis_q <- obis2 %>%
+  distinct(LATITUDE, LONGITUDE, zmin, zmax, group, mass_bin, .keep_all = TRUE)
+
+# ---------------------------
+# 4) Attach WOA profile rows within each query's depth interval
+#    This join is intentionally many-to-many (many queries per cell, many depths per cell).
+# ---------------------------
+obis_woa <- obis_q %>%
+  inner_join(
+    woa_long %>% select(LATITUDE, LONGITUDE, depth_m, temperature, po2_kPa),
+    by = c("LATITUDE", "LONGITUDE"),
+    relationship = "many-to-many"
+  ) %>%
+  filter(is.finite(temperature), is.finite(po2_kPa)) %>%
+  filter(depth_m >= zmin, depth_m <= zmax)
+```
+
+
+```{r}
+# If some queries have zero WOA depths in-range, they disappear here (that's fine).
+# If you want to diagnose:
+# anti <- obis_q %>% anti_join(obis_woa %>% distinct(LATITUDE,LONGITUDE,zmin,zmax,group,mass_bin),
+#                             by=c("LATITUDE","LONGITUDE","zmin","zmax","group","mass_bin"))
+
+# ---------------------------
+# Penn-style central estimate + uncertainty test per query
+#    Central estimate = nearest WOA depth to midpoint (zmin+zmax)/2
+#    Reject if max deviation across interval exceeds tolerances.
+# ---------------------------
+env_q <- obis_woa %>%
+  mutate(
+    zc   = (zmin + zmax) / 2,
+    dist = abs(depth_m - zc)
+  ) %>%
+  group_by(LATITUDE, LONGITUDE, zmin, zmax, group, mass_bin) %>%
+  arrange(dist, .by_group = TRUE) %>%
+  summarize(
+    central_depth_m = first(depth_m),
+    temperature0    = first(temperature),
+    po2_kPa0        = first(po2_kPa),
+
+    dT_max = max(abs(temperature - first(temperature)), na.rm = TRUE),
+    dO2_max_frac = max(abs(po2_kPa - first(po2_kPa)) / pmax(first(po2_kPa), 1e-9), na.rm = TRUE),
+
+    pass_uncertainty = (dT_max <= T_TOL_C) & (dO2_max_frac <= O2_TOL_FRAC),
+    .groups = "drop"
+  ) %>%
+  rename(temperature = temperature0, po2_kPa = po2_kPa0)
+
+# ---------------------------
+# Map env results back onto ALL occurrences (not just deduped queries)
+#    IMPORTANT: combined will NOT contain depth_m; it contains central_depth_m.
+# ---------------------------
+combined <- obis2 %>%
+  left_join(env_q, by = c("LATITUDE","LONGITUDE","zmin","zmax","group","mass_bin")) %>%
+  filter(!is.na(pass_uncertainty), pass_uncertainty) %>%
+  filter(is.finite(temperature), is.finite(po2_kPa)) %>%
+  mutate(
+    temperature = pmax(pmin(temperature, 30), 0),
+    po2_kPa     = pmax(pmin(po2_kPa,     30), 0),
+    mass_bin    = droplevels(mass_bin)
+  )
+
+# Sanity checks
+stopifnot(!("depth_m" %in% names(combined)))  # depth_m should NOT be in combined
+# central depth should lie within interval (allow tiny numerical tolerance)
+bad_cd <- mean(with(combined, central_depth_m < (zmin - 1e-9) | central_depth_m > (zmax + 1e-9)), na.rm = TRUE)
+message("Fraction with central_depth outside [zmin,zmax]: ", signif(bad_cd, 3))
+```
+
+```{r}
+# ---------------------------
+# Combine cells in 3D space (LAT, LON, depth)
+#    Reduces sampling bias
+# ---------------------------
+
+combined_cell <- combined %>%
+  distinct(group, mass_bin, LATITUDE, LONGITUDE, central_depth_m, temperature, po2_kPa)
+```
+
+## 7a) Saving
+
+```{r}
+
+```
+
+
+# 6) Plotting
+
+```{r fig.height=4, fig.width=10}
+# ---------------------------
+# Plot: pO2–T state space faceted by size, split by group
+# ---------------------------
+p <- ggplot(combined_cell, aes(x = temperature, y = po2_kPa)) +
+  geom_bin2d(bins = 30) +
+  coord_cartesian(xlim = c(0, 30), ylim = c(0, 30)) +
+  scale_fill_viridis_c(option = "viridis", trans = "log10", na.value = "white") +
+  labs(x = "Temperature (°C)", y = "pO2 (kPa)", fill = "Occurrences") +
+  theme_minimal()
+
+p_facet <- p +
+  facet_grid(group ~ mass_bin) +
+  ggtitle("pO2–T occurrence state space (Penn-style depth uncertainty; decade-centered size bins)")
+
+p_facet
+# ggsave(here("figs", "state_space_po2_T_by_decade_size_group.png"),
+#        p_facet, width = 16, height = 7, dpi = 250)
+
+p_overall <- p +
+  facet_wrap(~ group, ncol = 2) +
+  ggtitle("pO2–T occurrence state space (all sizes pooled)")
+
+p_overall
+# ggsave(here("figs", "state_space_po2_T_overall_by_group.png"),
+#        p_overall, width = 10, height = 5, dpi = 250)
+```
+
+
+```{r fig.width=10}
+scale_fill_blue_counts <- function(fill_title = "Occurrences",
+                                   na.value = "white",
+                                   guide = legend_bar_guide()) {
+  # For geom_bin2d, the computed variable is after_stat(count)
+  # We map fill to after_stat(count) and transform with log10 here.
+  scale_fill_gradient(
+    low = "#67A5CA", high = "#251A2D",
+    trans = "log10",
+    name = fill_title,
+    na.value = na.value,
+    guide = guide
+  )
+}
+
+# ---------------------------
+# 1) Main plot: all groups, faceted by group x mass_bin
+#    (assumes you already created `combined` with columns temperature, po2_kPa, group, mass_bin)
+# ---------------------------
+
+p_state <- ggplot(combined_cell, aes(x = temperature, y = po2_kPa)) +
+  geom_bin2d(aes(fill = after_stat(count)), bins = 30) +
+  coord_cartesian(xlim = c(0, 30), ylim = c(0, 30)) +
+  scale_fill_blue_counts(fill_title = "Occurrences") +
+  labs(x = "Temperature (°C)", y = "pO2 (kPa)") +
+  theme_surface_default(square = TRUE)
+
+p_state_facet <- p_state +
+  facet_grid(group ~ mass_bin) +
+  ggtitle("pO2–T occurrence state space (decade-centered size bins)")
+
+print(p_state_facet)
+```
+
+
+```{r}
+# ---------------------------
+# 2) Focus plot: epipelagic only, size bins 10^1 and 10^5 g
+# ---------------------------
+
+# Your bins are labeled like "10^k g" in the binning code I gave earlier.
+# If your labels differ, edit these strings to match levels(combined$mass_bin).
+target_bins <- c("10^1 g", "10^5 g")
+
+combined_epi_1e1_1e5 <- combined_cell %>%
+  filter(group == "epipelagic", mass_bin %in% target_bins) %>%
+  mutate(mass_bin = droplevels(mass_bin))
+
+p_epi_focus <- ggplot(combined_epi_1e1_1e5, aes(x = temperature, y = po2_kPa)) +
+  geom_bin2d(aes(fill = after_stat(count)), bins = 30) +
+  coord_cartesian(xlim = c(0, 30), ylim = c(0, 30)) +
+  scale_fill_blue_counts(fill_title = "Occurrences") +
+  facet_wrap(~ mass_bin, ncol = 2) +
+  labs(x = "Temperature (°C)", y = "pO2 (kPa)") +
+  ggtitle("Epipelagic state space: 10^1 g vs 10^5 g") +
+  theme_surface_default(square = TRUE)
+
+print(p_epi_focus)
+```
+
+
+# 7) Analysis
+
+```{r}
+# ============================================================
+# F1-based pO2_crit (Penn-style pO2_act analogue) vs mass scaling
+# USING combined_cell, restricted to mass bins 10^1 .. 10^6 g
+#
+# Outputs:
+#   - tau_epi, tau_dem: F1-optimal thresholds per mass_bin
+#   - b_epi, b_dem: slopes in log10(tau) ~ a + b log10(mass)
+#   - plot of log10(tau) vs log10(mass) with fitted lines
+#
+# Assumes you already have:
+#   - combined_cell: columns group, mass_bin, LATITUDE, LONGITUDE
+#   - woa_long: columns LATITUDE, LONGITUDE, depth_m, temperature, po2_kPa
+# ============================================================
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(purrr)
+  library(ggplot2)
+})
+
+# ----------------------------
+# Config
+# ----------------------------
+T0 <- 10
+T_band <- 5
+K_MIN <- -2
+K_MAX <- 8
+N_BG  <- 50000   # background subsample size (speed); set NULL for all
+SEED  <- 1
+
+# ----------------------------
+# Helpers
+# ----------------------------
+
+calc_f1 <- function(tp, fp, fn) {
+  precision <- tp / pmax(tp + fp, 1e-9)
+  recall    <- tp / pmax(tp + fn, 1e-9)
+  2 * precision * recall / pmax(precision + recall, 1e-9)
+}
+
+# Expects labels like "10^5 g"
+parse_k_from_mass_bin <- function(lbl) {
+  as.numeric(sub(".*10\\^(-?\\d+).*", "\\1", as.character(lbl)))
+}
+
+filter_bins_k <- function(df, k_min = 1, k_max = 6) {
+  df %>%
+    mutate(k_tmp = parse_k_from_mass_bin(mass_bin)) %>%
+    filter(is.finite(k_tmp), k_tmp >= k_min, k_tmp <= k_max) %>%
+    select(-k_tmp)
+}
+
+# Availability: for each WOA cell, take pO2 at the depth where T is closest to T0.
+# Keep only cells where closest T is within T_band.
+make_availability_isotherm <- function(woa_long, T0 = 10, T_band = 0.5) {
+  woa_long %>%
+    filter(is.finite(temperature), is.finite(po2_kPa)) %>%
+    mutate(distT = abs(temperature - T0)) %>%
+    group_by(LATITUDE, LONGITUDE) %>%
+    arrange(distT, .by_group = TRUE) %>%
+    summarize(
+      distT_min = first(distT),
+      po2_T0    = first(po2_kPa),
+      .groups = "drop"
+    ) %>%
+    filter(distT_min <= T_band) %>%
+    select(LATITUDE, LONGITUDE, po2_T0)
+}
+
+# Compute F1-optimal threshold tau* given presences and availability universe
+estimate_tau_f1 <- function(pres_cells, avail_cells, n_bg = 50000, seed = 1) {
+
+  # Presence must fall within availability universe
+  pres <- pres_cells %>%
+    inner_join(avail_cells, by = c("LATITUDE", "LONGITUDE")) %>%
+    mutate(presence = 1L)
+
+  if (nrow(pres) < 20) return(NULL)
+
+  bg <- avail_cells %>%
+    anti_join(pres_cells, by = c("LATITUDE", "LONGITUDE")) %>%
+    mutate(presence = 0L)
+
+  if (!is.null(n_bg) && nrow(bg) > n_bg) {
+    set.seed(seed)
+    bg <- bg %>% slice_sample(n = n_bg)
+  }
+
+  dat <- bind_rows(
+    pres %>% select(po2_T0, presence),
+    bg   %>% select(po2_T0, presence)
+  ) %>%
+    filter(is.finite(po2_T0))
+
+  taus <- as.numeric(quantile(dat$po2_T0, probs = seq(0.01, 0.99, by = 0.01), na.rm = TRUE))
+
+  curve <- map_dfr(taus, function(tau) {
+    pred <- as.integer(dat$po2_T0 >= tau)
+    tp <- sum(pred == 1 & dat$presence == 1)
+    fp <- sum(pred == 1 & dat$presence == 0)
+    fn <- sum(pred == 0 & dat$presence == 1)
+    tibble(tau_kPa = tau, F1 = calc_f1(tp, fp, fn), tp = tp, fp = fp, fn = fn)
+  })
+
+  best <- curve %>% arrange(desc(F1), tau_kPa) %>% slice(1)
+  list(best = best, curve = curve)
+}
+
+# Run F1 thresholds per mass_bin for a given group, using combined_cell presences
+tau_by_massbin <- function(combined_cell, woa_long, group_name,
+                           T0 = 10, T_band = 0.5,
+                           n_bg = 50000, seed = 1,
+                           k_min = 1, k_max = 6) {
+
+  avail <- make_availability_isotherm(woa_long, T0 = T0, T_band = T_band)
+
+  occ <- combined_cell %>%
+    filter(group == group_name) %>%
+    distinct(mass_bin, LATITUDE, LONGITUDE) %>%
+    filter_bins_k(k_min = k_min, k_max = k_max)
+
+  bins <- sort(unique(as.character(occ$mass_bin)))
+
+  map_dfr(bins, function(bn) {
+    pres_cells <- occ %>% filter(mass_bin == bn) %>% distinct(LATITUDE, LONGITUDE)
+    out <- estimate_tau_f1(pres_cells, avail, n_bg = n_bg, seed = seed)
+
+    if (is.null(out)) {
+      return(tibble(mass_bin = bn, tau_kPa = NA_real_, F1 = NA_real_, n_presence = nrow(pres_cells)))
+    }
+
+    tibble(
+      mass_bin = bn,
+      tau_kPa = out$best$tau_kPa,
+      F1 = out$best$F1,
+      tp = out$best$tp,
+      fp = out$best$fp,
+      fn = out$best$fn,
+      n_presence = nrow(pres_cells)
+    )
+  })
+}
+
+# Fit scaling log10(tau) = a + b log10(mass), with mass centers = 10^k
+fit_b_from_tau <- function(tau_df, k_min = 1, k_max = 6) {
+  tau_df <- filter_bins_k(tau_df, k_min = k_min, k_max = k_max)
+
+  dd <- tau_df %>%
+    filter(is.finite(tau_kPa), tau_kPa > 0) %>%
+    mutate(
+      k = parse_k_from_mass_bin(mass_bin),
+      mass_center_g = 10^k,
+      log10_tau = log10(tau_kPa),
+      log10_m   = log10(mass_center_g)
+    )
+
+  fit <- lm(log10_tau ~ log10_m, data = dd)
+  list(data = dd, fit = fit, coef = coef(fit))
+}
+
+# ----------------------------
+# Run analysis
+# ----------------------------
+
+# F1-optimal thresholds per mass bin
+tau_epi <- tau_by_massbin(combined_cell, woa_long, "epipelagic",
+                          T0 = T0, T_band = T_band, n_bg = N_BG, seed = SEED,
+                          k_min = K_MIN, k_max = K_MAX)
+
+tau_dem <- tau_by_massbin(combined_cell, woa_long, "demersal",
+                          T0 = T0, T_band = T_band, n_bg = N_BG, seed = SEED,
+                          k_min = K_MIN, k_max = K_MAX)
+
+# Fit mass scaling and extract b
+fit_epi <- fit_b_from_tau(tau_epi, k_min = K_MIN, k_max = K_MAX)
+fit_dem <- fit_b_from_tau(tau_dem, k_min = K_MIN, k_max = K_MAX)
+
+b_epi <- unname(fit_epi$coef["log10_m"])
+b_dem <- unname(fit_dem$coef["log10_m"])
+
+cat("F1-optimal pO2 threshold scaling at ~", T0, "°C (±", T_band, "°C)\n", sep = "")
+cat("Mass bins: 10^", K_MIN, " to 10^", K_MAX, " g\n", sep = "")
+cat("epipelagic b = ", signif(b_epi, 4), "\n", sep = "")
+cat("demersal   b = ", signif(b_dem, 4), "\n\n", sep = "")
+
+cat("Epipelagic fit summary:\n")
+print(summary(fit_epi$fit))
+cat("\nDemersal fit summary:\n")
+print(summary(fit_dem$fit))
+
+# ----------------------------
+# Plot results
+# ----------------------------
+plot_df <- bind_rows(
+  fit_epi$data %>% mutate(group = "epipelagic"),
+  fit_dem$data %>% mutate(group = "demersal")
+)
+
+ggplot(plot_df, aes(x = log10_m, y = log10_tau, color = group)) +
+  geom_point(size = 2) +
+  geom_smooth(method = "lm", se = TRUE) +
+  theme_minimal() +
+  labs(
+    x = "log10(mass center, g)",
+    y = "log10(F1-optimal pO2 threshold τ*, kPa)",
+    title = paste0("Mass scaling of F1-optimal pO2 threshold at ~", T0, "°C (±", T_band, "°C)")
+  )
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# --- Settings ---
+T_LO <- 5
+T_HI <- 15
+K_MIN <- 0
+K_MAX <- 6
+Q_LOW <- 0.10  # 10th percentile threshold (set 0.05 for more "lower envelope")
+
+parse_k_from_mass_bin <- function(lbl) {
+  as.numeric(sub(".*10\\^(-?\\d+).*", "\\1", as.character(lbl)))
+}
+
+# Choose which group(s) to analyze:
+# set group_filter <- NULL to pool groups
+group_filter <- c("epipelagic", "demersal")  # or just "epipelagic"
+
+# --- Build thresholds ---
+df_band <- combined_cell %>%
+  filter(temperature >= T_LO, temperature <= T_HI) %>%
+  mutate(k = parse_k_from_mass_bin(mass_bin)) %>%
+  filter(is.finite(k), k >= K_MIN, k <= K_MAX) %>%
+  { if (is.null(group_filter)) . else filter(., group %in% group_filter) } %>%
+  filter(is.finite(po2_kPa), po2_kPa > 0)
+
+thr_df <- df_band %>%
+  group_by(group, k) %>%
+  summarize(
+    mass_center_g = 10^k,
+    n_cells = n(),  # number of cell observations contributing
+    po2_thr_kPa = as.numeric(quantile(po2_kPa, probs = Q_LOW, na.rm = TRUE)),
+    po2_median_kPa = median(po2_kPa, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  filter(is.finite(po2_thr_kPa))
+
+# --- Fit mass scaling (log-log): log10(thr) ~ a + b log10(mass) ---
+fit_tbl <- thr_df %>%
+  group_by(group) %>%
+  group_modify(~{
+    dd <- .x %>%
+      mutate(log10_m = log10(mass_center_g),
+             log10_thr = log10(po2_thr_kPa))
+    fit <- lm(log10_thr ~ log10_m, data = dd)
+    tibble(
+      a = unname(coef(fit)[1]),
+      b = unname(coef(fit)[2]),
+      r2 = summary(fit)$r.squared,
+      n_bins = nrow(dd)
+    )
+  }) %>%
+  ungroup()
+
+print(fit_tbl)
+
+# --- Plot threshold vs mass (log-log) ---
+ggplot(thr_df, aes(x = mass_center_g, y = po2_thr_kPa, color = group)) +
+  geom_point(size = 2) +
+  geom_smooth(method = "lm", se = TRUE) +
+  scale_x_log10() +
+  scale_y_log10() +
+  theme_minimal() +
+  labs(
+    x = "Mass bin center (g)",
+    y = paste0("pO2 threshold (", Q_LOW*100, "th percentile), kPa"),
+    title = paste0("Lower-envelope pO2 threshold vs mass (T in ", T_LO, "–", T_HI, "°C)")
+  )
+```
+
+```{r}
+
+```
+

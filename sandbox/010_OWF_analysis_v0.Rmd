@@ -1,0 +1,267 @@
+---
+title: "000_OBISwoaFishBase_extract_v5"
+output: html_document
+date: "2026-03-03"
+---
+
+```{r}
+library(tidyverse)
+library(here)
+
+# Source your plotting aesthetics (theme_surface_default, legend_bar_guide, etc.)
+file_sources <- list.files(here("scripts"), pattern = "\\.R$", full.names = TRUE)
+invisible(lapply(file_sources, source))
+```
+
+
+# 0) Configuration
+
+```{r}
+out_dir <- here("data_out", "OBISwoaFishBase")
+
+# This is your renamed combined_cell CSV:
+tO2_obis_cell_csv <- file.path(out_dir, "binOccurrencesCell__dT_0.50C__dO2_0.50kPa__T_0_30__pO2_0_30.csv")
+stopifnot(file.exists(tO2_obis_cell_csv))
+
+# Load and glimpse
+tO2_obis_cell <- readr::read_csv(tO2_obis_cell_csv, show_col_types = FALSE)
+stopifnot(all(c("group","mass_bin","T_bin","O2_bin","n") %in% names(tO2_obis_cell))) # Expected columns: group, mass_bin, T_bin, O2_bin, n
+tO2_obis_cell
+
+# Plot resolution (can be >= stored resolution).
+# If you stored 0.5 x 0.5, then:
+#   plot_dT = 0.5, plot_dO2 = 0.5 -> no coarsening
+#   plot_dT = 1.0, plot_dO2 = 1.0 -> coarsen by 2x
+plot_dT  <- 1.0
+plot_dO2 <- 1.0
+
+# Axes ranges
+T_range  <- c(0, 30)
+O2_range <- c(0, 30)
+
+# pO2_act analysis settings
+target_group <- "epipelagic"
+T_lo <- 5
+T_hi <- 15
+Q_low <- 0.01    # log10-quantile (try 0.10, 0.05, 0.02)
+k_min <- 0       # 10^1 g
+k_max <- 6       # 10^6 g
+min_total_weight <- 200  # minimum sum(n) per mass bin within T band
+```
+
+
+# 1) Plotting
+
+## a) Helpers
+
+```{r}
+# --- Aesthetics (same as before) ---
+scale_fill_blue_counts <- function(fill_title = "Occurrences",
+                                   na.value = "white",
+                                   guide = legend_bar_guide()) {
+  scale_fill_gradient(
+    low = "#67A5CA", high = "#251A2D",
+    trans = "log10",
+    name = fill_title,
+    na.value = na.value,
+    guide = guide
+  )
+}
+
+# --- Coarsen bins: aggregate counts onto coarser bin centers ---
+# Assumes T_bin and O2_bin are already bin CENTERS on a regular grid.
+coarsen_PT_bins <- function(df, dT_new = 1.0, dO2_new = 1.0,
+                            T_range = c(0,30), O2_range = c(0,30)) {
+
+  df %>%
+    mutate(
+      # clamp (just in case)
+      T_bin  = pmax(pmin(T_bin,  T_range[2]),  T_range[1]),
+      O2_bin = pmax(pmin(O2_bin, O2_range[2]), O2_range[1]),
+
+      # map existing centers -> coarser centers
+      T_bin2  = floor((T_bin  - T_range[1]) / dT_new)  * dT_new + T_range[1] + dT_new/2,
+      O2_bin2 = floor((O2_bin - O2_range[1]) / dO2_new) * dO2_new + O2_range[1] + dO2_new/2
+    ) %>%
+    group_by(group, mass_bin, T_bin = T_bin2, O2_bin = O2_bin2) %>%
+    summarize(n = sum(n, na.rm = TRUE), .groups = "drop")
+}
+
+plot_PT_binned <- function(df_binned,
+                           facet = c("grid", "wrap", "none"),
+                           title = NULL,
+                           T_range = c(0,30), O2_range = c(0,30),
+                           theme = theme_surface_default(base_size = 9, square = TRUE)) {
+
+  facet <- match.arg(facet)
+
+  p <- ggplot(df_binned, aes(x = T_bin, y = O2_bin, fill = n)) +
+    geom_tile() +
+    coord_cartesian(xlim = T_range, ylim = O2_range) +
+    scale_fill_blue_counts("Cells") +
+    labs(x = "Temperature (°C)", y = "pO2 (kPa)") +
+    theme
+
+  if (!is.null(title)) p <- p + ggtitle(title)
+
+  if (facet == "grid") {
+    p <- p + facet_grid(group ~ mass_bin)
+  } else if (facet == "wrap") {
+    p <- p + facet_wrap(~ group, ncol = 2)
+  }
+
+  p
+}
+
+th <- theme_surface_default(base_size = 9, square = TRUE)
+```
+
+
+## b) Plot
+
+```{r}
+tO2_plot <- coarsen_PT_bins(tO2_obis_cell,
+                            dT_new = plot_dT, dO2_new = plot_dO2,
+                            T_range = T_range, O2_range = O2_range)
+
+p_grid <- plot_PT_binned(
+  tO2_plot,
+  facet = "grid",
+  title = paste0("pO2–T state space (binned cells; ΔT=", plot_dT, "°C, ΔpO2=", plot_dO2, " kPa)"),
+  T_range = T_range, O2_range = O2_range
+)
+p_grid
+
+p_gridEx <- plot_PT_binned(
+  tO2_plot %>%
+    filter(mass_bin %in% c("10^1 g", "10^5 g"),
+           group == "epipelagic"),
+  #facet = "grid",
+  title = paste0("pO2–T state space epipelagic (binned cells; ΔT=", plot_dT, "°C, ΔpO2=", plot_dO2, " kPa)"),
+  T_range = T_range, O2_range = O2_range
+)
+p_gridEx
+
+# Something is wrong with the below
+# p_wrap <- plot_PT_binned(
+#   tO2_plot,
+#   facet = "wrap",
+#   title = paste0("pO2–T state space by group (binned cells; ΔT=", plot_dT, "°C, ΔpO2=", plot_dO2, " kPa)"),
+#   T_range = T_range, O2_range = O2_range
+# )
+# p_wrap
+```
+
+
+# 2) Analysis
+
+## a) Helpers
+
+```{r}
+parse_k_from_mass_bin <- function(lbl) {
+  as.numeric(sub(".*10\\^(-?\\d+).*", "\\1", as.character(lbl)))
+}
+
+# Weighted quantile for x with weights w
+weighted_quantile <- function(x, w, probs = 0.10) {
+  ok <- is.finite(x) & is.finite(w) & w > 0
+  x <- x[ok]; w <- w[ok]
+  if (length(x) == 0) return(NA_real_)
+
+  o <- order(x)
+  x <- x[o]; w <- w[o]
+  cw <- cumsum(w) / sum(w)
+  approx(x = cw, y = x, xout = probs, ties = "ordered")$y
+}
+
+# pO2_act defined as 10^(Q_q(log10(pO2))) with weights
+weighted_log_quantile_po2 <- function(po2, w, q = 0.10) {
+  ok <- is.finite(po2) & po2 > 0 & is.finite(w) & w > 0
+  if (!any(ok)) return(NA_real_)
+  10^(weighted_quantile(log10(po2[ok]), w[ok], probs = q))
+}
+```
+
+## b) Compute
+
+```{r}
+df_band <- tO2_obis_cell %>%
+  filter(group == target_group) %>%
+  mutate(k = parse_k_from_mass_bin(mass_bin)) %>%
+  filter(is.finite(k), k >= k_min, k <= k_max) %>%
+  # temperature band (using T_bin centers)
+  filter(T_bin >= T_lo, T_bin <= T_hi) %>%
+  filter(is.finite(O2_bin), is.finite(n), n > 0)
+
+po2_act_tbl <- df_band %>%
+  group_by(k) %>%
+  summarize(
+    mass_center_g = 10^k,
+    total_weight = sum(n, na.rm = TRUE),
+    po2_act_kPa = weighted_log_quantile_po2(O2_bin, n, q = Q_low),
+    po2_med_kPa = weighted_log_quantile_po2(O2_bin, n, q = 0.50),
+    .groups = "drop"
+  ) %>%
+  filter(total_weight >= min_total_weight, is.finite(po2_act_kPa))
+
+po2_act_tbl
+```
+
+## c) Plot
+
+```{r}
+plot_df <- po2_act_tbl %>%
+  mutate(
+    log10_m = log10(mass_center_g),
+    log10_tau = log10(po2_act_kPa)
+  )
+
+fit <- lm(log10_tau ~ log10_m, data = plot_df)
+summary(fit)
+
+a <- unname(coef(fit)[1])
+b <- unname(coef(fit)[2])
+r2 <- summary(fit)$r.squared
+
+ggplot(plot_df, aes(x = log10_m, y = log10_tau)) +
+  geom_point(size = 1.6) +
+  geom_smooth(method = "lm", se = TRUE, color="black", linewidth = 0.9) +
+  theme_minimal() +
+  labs(
+    x = "log10(mass center, g)",
+    y = paste0("log10(pO2_act, kPa) [weighted log-quantile q=", Q_low, "]"),
+    title = paste0("Epipelagic pO2_act mass scaling (T ", T_lo, "–", T_hi, "°C)"),
+    subtitle = paste0("a=", signif(a,3), ",  b=", signif(b,3), ",  R²=", signif(r2,3),
+                      "  (min total weight per bin = ", min_total_weight, ")")
+  ) +
+  th
+
+ggplot(po2_act_tbl, aes(x = mass_center_g, y = po2_act_kPa)) +
+  geom_point(size = 1.6, color="#6a51a3") +
+  geom_line(linewidth = 0.9, color="#6a51a3") +
+  #geom_smooth(method = "lm", se = TRUE, color="black", linewidth = 0.9) +
+  scale_x_log10(expand = c(0, 0)) +
+  scale_y_continuous(limits=c(0,30), expand = c(0, 0)) +
+  theme_minimal() +
+  labs(
+    x = "Mass bin center (g)",
+    y = paste0("pO2_act (kPa) [weighted 10^(Q_q(log10 pO2)), q=", Q_low, "]"),
+    title = paste0("Epipelagic pO2_act vs mass (T ", T_lo, "–", T_hi, "°C)")
+  ) +
+  th
+```
+
+```{r}
+ggplot(po2_act_tbl, aes(x = mass_center_g, y = total_weight)) +
+  geom_point(size = 2) +
+  scale_x_log10() +
+  theme_minimal() +
+  labs(
+    x = "Mass bin center (g)",
+    y = "Total weight Σ n (cells)",
+    title = paste0("Epipelagic data support per mass bin (T ", T_lo, "–", T_hi, "°C)")
+  ) +
+  th
+```
+
+

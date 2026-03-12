@@ -14,17 +14,22 @@ library(here)
 library(rfishbase)
 library(robis)
 library(future.apply)
+
+file_sources <- list.files(here("scripts"), pattern = "*.R$", full.names = TRUE)
+invisible(lapply(file_sources, source))
+
+th <- theme_surface_default(base_size = 9, square = TRUE)
 ```
 
 # Get WOA data
 
 ````{r}
-LOCAL_PATH <- "/../traits/obis/data"
+LOCAL_PATH <- "/../environment/" #"/../traits/obis/data"
 
 PATH <- paste0(gsub("scratch", "scratch", here()), LOCAL_PATH)                  ##PATH <- paste0(gsub("scratch", "project", here()), LOCAL_PATH)   ## use if environment can see mirrored Project folder
 
-woa_oxy <- read.csv(paste0(PATH, "/woa_pO2.csv"))                                #read.csv(here("data/woa_pO2.csv"))             ## use if proximal
-woa_temp <- read.csv(paste0(PATH, "/woa18_95A4_t00an01.csv"))                       #read.csv(here("data/woa18_95A4_t00an01.csv"))  ## use if proximal
+woa_oxy <- read.csv(paste0(PATH, "data_out/woa18_all_pO2_kPa_an01.csv"))        #read.csv(here("data/woa_pO2.csv"))             ## use if proximal
+woa_temp <- read.csv(paste0(PATH, "data/woa18_95A4_t00an01.csv"))               #read.csv(here("data/woa18_95A4_t00an01.csv"))  ## use if proximal
 ```
 
 

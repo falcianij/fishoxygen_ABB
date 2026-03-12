@@ -1,0 +1,478 @@
+---
+title: "000_OBISwoaFishBase_extract_v5"
+output: html_document
+date: "2026-03-03"
+---
+
+```{r}
+library(tidyverse)
+library(here)
+library(rfishbase)
+library(robis)
+library(future.apply)
+
+# Source your scripts for aesthetics + helpers (theme_surface_default, legend_bar_guide, etc.)
+file_sources <- list.files(here("scripts"), pattern = "\\.R$", full.names = TRUE)
+invisible(lapply(file_sources, source))
+```
+
+# 0) Configuration
+
+```{r}
+cfg <- list(
+  LOCAL_PATH = "/../environment/",
+  WOA_PO2_FILE  = NULL,  # filled below
+  WOA_TEMP_FILE = NULL,  # filled below
+
+  # Penn-style tolerances
+  T_TOL_C     = 2.0,
+  O2_TOL_FRAC = 0.20,
+
+  # FishBase DemersPelag groupings
+  labels_epipelagic = c("pelagic", "pelagic-neritic", "pelagic-oceanic"),
+  labels_demersal   = c("demersal", "bathydemersal"),
+
+  # OBIS parallelism
+  n_workers = 64,
+
+  # Dummy L-W conversion
+  a_dummy = 0.010,
+  b_dummy = 3.00,
+
+  # decade-centered mass bins
+  K_FLOOR = -10,
+  K_CEIL  = 10,
+
+  # pO2–T binning (high-res for saving)
+  PT_bin_T  = 0.5,  # °C
+  PT_bin_O2 = 0.5  # kPa
+)
+
+PATH <- paste0(here(), cfg$LOCAL_PATH)
+cfg$WOA_PO2_FILE  <- paste0(PATH, "data_out/woa18_all_pO2_kPa_an01.csv")
+cfg$WOA_TEMP_FILE <- paste0(PATH, "data/woa18_95A4_t00an01.csv")
+
+out_dir <- here("data_out", "OBISwoaFishBase")
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+plan(multisession, workers = cfg$n_workers)
+```
+
+
+# 1) Helpers: grid + binning + saving + plotting
+
+```{r}
+snap_1deg_center <- function(x) round(x / 1) * 1 + 0.5
+
+woa_wide_to_long <- function(df, value_name) {
+  df %>%
+    pivot_longer(starts_with("X"), names_to = "depth_m", values_to = value_name) %>%
+    mutate(depth_m = as.numeric(sub("^X", "", depth_m)))
+}
+
+make_decade_centered_bins <- function(mass_g, k_floor = -10, k_ceiling = 10) {
+  lg <- log10(mass_g)
+  lg <- lg[is.finite(lg)]
+  if (length(lg) == 0) {
+    k_min <- k_floor; k_max <- k_ceiling
+  } else {
+    k_min <- max(floor(min(lg)), k_floor)
+    k_max <- min(ceiling(max(lg)), k_ceiling)
+  }
+  ks <- seq(k_min, k_max, by = 1)
+  edges <- 10^seq(k_min - 0.5, k_max + 0.5, by = 1)
+  list(breaks = edges, labels = paste0("10^", ks, " g"))
+}
+```
+
+
+```{r}
+get_fishbase_species <- function(labels, group_name, a_dummy, b_dummy) {
+  fb_tbl("species") %>%
+    transmute(
+      sci_name = paste(Genus, Species),
+      DemersPelag,
+      Length,
+      Saltwater
+    ) %>%
+    filter(Saltwater == 1, DemersPelag %in% labels) %>%
+    mutate(
+      mass_g = a_dummy * Length^b_dummy,
+      group  = group_name
+    ) %>%
+    filter(is.finite(mass_g)) %>%
+    distinct(sci_name, .keep_all = TRUE)
+}
+
+get_obis_one <- function(species) {
+  tryCatch({
+    x <- occurrence(species)
+    if (!is.null(x) && nrow(x) > 0) x %>% mutate(sci_name = species) else NULL
+  }, error = function(e) NULL)
+}
+
+fetch_obis <- function(species_vec) {
+  obis_list <- future_lapply(species_vec, get_obis_one)
+  data <- bind_rows(obis_list)
+  missing <- species_vec[which(vapply(obis_list, is.null, logical(1)))]
+  list(data = data, missing = missing)
+}
+```
+
+
+```{r}
+# Efficient saving: prefer qs if installed, else saveRDS(xz)
+save_obj <- function(x, path_no_ext) {
+  if (requireNamespace("qs", quietly = TRUE)) {
+    qs::qsave(x, paste0(path_no_ext, ".qs"))
+    return(paste0(path_no_ext, ".qs"))
+  } else {
+    saveRDS(x, paste0(path_no_ext, ".rds"), compress = "xz")
+    return(paste0(path_no_ext, ".rds"))
+  }
+}
+```
+
+
+```{r}
+# Build pO2–T binned grids (counts) for later analysis
+# Output is compact: one row per (group, mass_bin, T_bin, O2_bin)
+bin_PT_counts <- function(df, dT = 0.5, dO2 = 0.5,
+                          T_range = c(0, 30), O2_range = c(0, 30),
+                          weight_col = NULL) {
+  # Define bin indices
+  df2 <- df %>%
+    filter(is.finite(temperature), is.finite(po2_kPa)) %>%
+    mutate(
+      T_bin  = floor((pmax(pmin(temperature, T_range[2]), T_range[1]) - T_range[1]) / dT) * dT + T_range[1] + dT/2,
+      O2_bin = floor((pmax(pmin(po2_kPa,     O2_range[2]), O2_range[1]) - O2_range[1]) / dO2) * dO2 + O2_range[1] + dO2/2
+    )
+
+  if (is.null(weight_col)) {
+    df2 %>%
+      count(group, mass_bin, T_bin, O2_bin, name = "n")
+  } else {
+    df2 %>%
+      group_by(group, mass_bin, T_bin, O2_bin) %>%
+      summarize(n = sum(.data[[weight_col]], na.rm = TRUE), .groups = "drop")
+  }
+}
+```
+
+```{r}
+# -------- Aesthetic plotting (single workhorse) --------
+
+scale_fill_blue_counts <- function(fill_title = "Occurrences",
+                                   na.value = "white",
+                                   guide = legend_bar_guide()) {
+  scale_fill_gradient(
+    low = "#67A5CA", high = "#251A2D",
+    trans = "log10",
+    name = fill_title,
+    na.value = na.value,
+    guide = guide
+  )
+}
+
+plot_PT_state_space <- function(df, bins = 30,
+                                facet = c("grid", "wrap", "none"),
+                                title = NULL,
+                                xlim = c(0,30), ylim = c(0,30),
+                                theme = theme_surface_default(base_size = 9, square = TRUE)) {
+  facet <- match.arg(facet)
+  p <- ggplot(df, aes(x = temperature, y = po2_kPa)) +
+    geom_bin2d(aes(fill = after_stat(count)), bins = bins) +
+    coord_cartesian(xlim = xlim, ylim = ylim) +
+    scale_fill_blue_counts("Occurrences") +
+    labs(x = "Temperature (°C)", y = "pO2 (kPa)") +
+    theme
+
+  if (!is.null(title)) p <- p + ggtitle(title)
+
+  if (facet == "grid") {
+    p <- p + facet_grid(group ~ mass_bin)
+  } else if (facet == "wrap") {
+    p <- p + facet_wrap(~ group, ncol = 2)
+  }
+  p
+}
+```
+
+
+# 2) Load WOA and prep helpers
+
+```{r}
+load_woa <- function(cfg) {
+  woa_temp <- read.csv(cfg$WOA_TEMP_FILE)
+  woa_po2  <- read.csv(cfg$WOA_PO2_FILE)
+
+  woa_temp_long <- woa_wide_to_long(woa_temp, "temperature")
+  woa_po2_long  <- woa_wide_to_long(woa_po2,  "po2_kPa")
+
+  woa_long <- full_join(woa_temp_long, woa_po2_long,
+                        by = c("LATITUDE", "LONGITUDE", "depth_m"))
+
+  # uniqueness per (cell, depth)
+  woa_long <- woa_long %>%
+    group_by(LATITUDE, LONGITUDE, depth_m) %>%
+    summarize(
+      temperature = mean(temperature, na.rm = TRUE),
+      po2_kPa     = mean(po2_kPa,     na.rm = TRUE),
+      .groups = "drop"
+    )
+
+  woa_seafloor <- woa_long %>%
+    filter(is.finite(temperature) | is.finite(po2_kPa)) %>%
+    group_by(LATITUDE, LONGITUDE) %>%
+    summarize(zfloor = max(depth_m, na.rm = TRUE), .groups = "drop")
+
+  list(woa_long = woa_long, woa_seafloor = woa_seafloor)
+}
+```
+
+
+# 3) Species list + OBIS + processing into tO2_obis / tO2_obis_cell
+
+```{r}
+build_species_lookup <- function(cfg) {
+  fb_epi <- get_fishbase_species(cfg$labels_epipelagic, "epipelagic", cfg$a_dummy, cfg$b_dummy)
+  fb_dem <- get_fishbase_species(cfg$labels_demersal,   "demersal",   cfg$a_dummy, cfg$b_dummy)
+
+  fb_all <- bind_rows(fb_epi, fb_dem) %>%
+    distinct(sci_name, .keep_all = TRUE)
+
+  bins <- make_decade_centered_bins(fb_all$mass_g, cfg$K_FLOOR, cfg$K_CEIL)
+
+  fb_all <- fb_all %>%
+    mutate(
+      mass_bin = cut(
+        mass_g,
+        breaks = bins$breaks,
+        include.lowest = TRUE,
+        right = FALSE,
+        labels = bins$labels
+      )
+    )
+
+  fb_all %>%
+    select(sci_name, group, mass_g, mass_bin)
+}
+
+fetch_and_prep_obis <- function(sp_lookup) {
+  res_obis <- fetch_obis(sp_lookup$sci_name)
+  list(
+    obis_raw = res_obis$data,
+    missing  = res_obis$missing,
+    obis = res_obis$data %>%
+      transmute(
+        sci_name = if_else(is.na(sci_name), scientificName, sci_name),
+        LATITUDE = decimalLatitude,
+        LONGITUDE = decimalLongitude,
+        zmin = as.numeric(minimumDepthInMeters),
+        zmax = as.numeric(maximumDepthInMeters)
+      ) %>%
+      filter(is.finite(LATITUDE), is.finite(LONGITUDE)) %>%
+      left_join(sp_lookup, by = "sci_name") %>%
+      filter(!is.na(group), !is.na(mass_bin)) %>%
+      mutate(
+        LATITUDE  = snap_1deg_center(LATITUDE),
+        LONGITUDE = snap_1deg_center(LONGITUDE)
+      )
+  )
+}
+
+# Main processing: depth rules -> dedupe queries -> join WOA -> uncertainty -> tO2_obis & tO2_obis_cell
+process_obis_to_combined <- function(obis, woa_long, woa_seafloor, cfg) {
+
+  # Depth rules (Penn-like)
+  obis2 <- obis %>%
+    mutate(
+      zmin = if_else(is.na(zmin) & !is.na(zmax), zmax, zmin),
+      zmax = if_else(is.na(zmax) & !is.na(zmin), zmin, zmax)
+    ) %>%
+    left_join(woa_seafloor, by = c("LATITUDE", "LONGITUDE")) %>%
+    mutate(
+      zmin = if_else(is.na(zmin) & is.na(zmax), 0, zmin),
+      zmax = if_else(is.na(zmax) & is.na(zmin), zfloor, zmax)
+    ) %>%
+    select(-zfloor) %>%
+    filter(is.finite(zmin), is.finite(zmax), zmax >= zmin)
+
+  # Deduplicate env queries (big speedup)
+  obis_q <- obis2 %>%
+    distinct(LATITUDE, LONGITUDE, zmin, zmax, group, mass_bin, .keep_all = TRUE)
+
+  # Join WOA depths for each query, restrict to [zmin,zmax]
+  obis_woa <- obis_q %>%
+    inner_join(
+      woa_long %>% select(LATITUDE, LONGITUDE, depth_m, temperature, po2_kPa),
+      by = c("LATITUDE", "LONGITUDE"),
+      relationship = "many-to-many"
+    ) %>%
+    filter(is.finite(temperature), is.finite(po2_kPa)) %>%
+    filter(depth_m >= zmin, depth_m <= zmax)
+
+  # Penn-style central estimate + uncertainty per query
+  env_q <- obis_woa %>%
+    mutate(
+      zc   = (zmin + zmax) / 2,
+      dist = abs(depth_m - zc)
+    ) %>%
+    group_by(LATITUDE, LONGITUDE, zmin, zmax, group, mass_bin) %>%
+    arrange(dist, .by_group = TRUE) %>%
+    summarize(
+      central_depth_m = first(depth_m),
+      temperature     = first(temperature),
+      po2_kPa         = first(po2_kPa),
+      dT_max = max(abs(temperature - first(temperature)), na.rm = TRUE),
+      dO2_max_frac = max(abs(po2_kPa - first(po2_kPa)) / pmax(first(po2_kPa), 1e-9), na.rm = TRUE),
+      pass_uncertainty = (dT_max <= cfg$T_TOL_C) & (dO2_max_frac <= cfg$O2_TOL_FRAC),
+      .groups = "drop"
+    )
+
+  tO2_obis <- obis2 %>%
+    left_join(env_q, by = c("LATITUDE","LONGITUDE","zmin","zmax","group","mass_bin")) %>%
+    filter(!is.na(pass_uncertainty), pass_uncertainty) %>%
+    filter(is.finite(temperature), is.finite(po2_kPa)) %>%
+    mutate(
+      temperature = pmax(pmin(temperature, 30), 0),
+      po2_kPa     = pmax(pmin(po2_kPa,     30), 0),
+      mass_bin    = droplevels(mass_bin)
+    )
+
+  stopifnot(!("depth_m" %in% names(tO2_obis)))
+
+  tO2_obis_cell <- tO2_obis %>%
+    distinct(group, mass_bin, LATITUDE, LONGITUDE, central_depth_m, temperature, po2_kPa)
+
+  list(obis2 = obis2, tO2_obis = tO2_obis, tO2_obis_cell = tO2_obis_cell, env_q = env_q)
+}
+```
+
+
+# 4) Saving module
+
+```{r}
+# ---- 1) Save FULL tO2_obis as a single .RData ----
+# (Loads later with: load(file.path(out_dir, "<name>.RData")) )
+combined_rdata_file <- file.path(out_dir, "allOccurrences_OBISwoaFishBase.RData")
+save(tO2_obis, file = combined_rdata_file, compress = "xz")
+
+# ---- 2) Aggregate to pO2–T cells (same bins for tO2_obis + tO2_obis_cell) ----
+# Recommended "fairly resolved" bins over 0–30 ranges:
+PT_bin_T  <- 0.5  # °C
+PT_bin_O2 <- 0.5  # kPa
+T_range   <- c(0, 30)
+O2_range  <- c(0, 30)
+
+bin_PT_counts <- function(df, dT = 0.5, dO2 = 0.5,
+                          T_range = c(0, 30), O2_range = c(0, 30)) {
+  df %>%
+    filter(is.finite(temperature), is.finite(po2_kPa)) %>%
+    mutate(
+      # clamp to plotting range
+      temperature = pmax(pmin(temperature, T_range[2]), T_range[1]),
+      po2_kPa     = pmax(pmin(po2_kPa,     O2_range[2]), O2_range[1]),
+      # bin centers
+      T_bin  = floor((temperature - T_range[1]) / dT)  * dT + T_range[1] + dT/2,
+      O2_bin = floor((po2_kPa     - O2_range[1]) / dO2) * dO2 + O2_range[1] + dO2/2
+    ) %>%
+    count(group, mass_bin, T_bin, O2_bin, name = "n")
+}
+
+PT_grid_counts_from_combined <- bin_PT_counts(
+  tO2_obis, dT = PT_bin_T, dO2 = PT_bin_O2, T_range = T_range, O2_range = O2_range
+)
+
+PT_grid_counts_from_tO2_obis_cell <- bin_PT_counts(
+  tO2_obis_cell, dT = PT_bin_T, dO2 = PT_bin_O2, T_range = T_range, O2_range = O2_range
+)
+
+# ---- 3) Save PT grids as CSVs ----
+csv_combined_file <- file.path(
+  out_dir,
+  sprintf("binOccurrences__dT_%0.2fC__dO2_%0.2fkPa__T_%d_%d__pO2_%d_%d.csv",
+          PT_bin_T, PT_bin_O2, T_range[1], T_range[2], O2_range[1], O2_range[2])
+)
+
+csv_tO2_obis_cell_file <- file.path(
+  out_dir,
+  sprintf("binOccurrencesCell__dT_%0.2fC__dO2_%0.2fkPa__T_%d_%d__pO2_%d_%d.csv",
+          PT_bin_T, PT_bin_O2, T_range[1], T_range[2], O2_range[1], O2_range[2])
+)
+
+readr::write_csv(PT_grid_counts_from_combined,      csv_combined_file)
+readr::write_csv(PT_grid_counts_from_tO2_obis_cell, csv_tO2_obis_cell_file)
+
+message("Saved:\n- ", combined_rdata_file,
+        "\n- ", csv_combined_file,
+        "\n- ", csv_tO2_obis_cell_file)
+```
+
+
+# 5) Run pipeline
+
+```{r}
+woa <- load_woa(cfg)
+sp_lookup <- build_species_lookup(cfg)
+
+obis_res <- fetch_and_prep_obis(sp_lookup)
+writeLines(obis_res$missing, file.path(cfg$out_run, "missing_species.txt"))
+
+proc <- process_obis_to_combined(
+  obis = obis_res$obis,
+  woa_long = woa$woa_long,
+  woa_seafloor = woa$woa_seafloor,
+  cfg = cfg
+)
+
+tO2_obis      <- proc$tO2_obis
+tO2_obis_cell <- proc$tO2_obis_cell
+
+# Save outputs
+saved <- save_run_outputs(cfg, tO2_obis, tO2_obis_cell,
+                          PT_bin_T = cfg$PT_bin_T,
+                          PT_bin_O2 = cfg$PT_bin_O2)
+print(saved)
+```
+
+
+# 6) Plotting (aesthetic defaults; minimal repetition)
+
+```{r}
+# Faceted by group ~ mass_bin (use tO2_obis_cell by default to reduce sampling bias)
+p_grid <- plot_PT_state_space(
+  tO2_obis_cell,
+  bins  = 30,
+  facet = "grid",
+  title = "pO2–T state space (tO2_obis_cell; decade-centered size bins)"
+)
+p_grid
+# ggsave(file.path(cfg$out_fig, "state_space_PT_tO2_obis_cell_grid.png"),
+#        p_grid, width = 16, height = 7, dpi = 250)
+
+# Overall by group (pooled sizes)
+p_wrap <- plot_PT_state_space(
+  tO2_obis_cell,
+  bins  = 30,
+  facet = "wrap",
+  title = "pO2–T state space (tO2_obis_cell; sizes pooled)"
+)
+p_wrap
+# ggsave(file.path(cfg$out_fig, "state_space_PT_tO2_obis_cell_overall.png"),
+#        p_wrap, width = 10, height = 5, dpi = 250)
+
+# Focus plot: epipelagic only, 10^1 and 10^5
+target_bins <- c("10^1 g", "10^5 g")
+p_focus <- plot_PT_state_space(
+  tO2_obis_cell %>% filter(group == "epipelagic", mass_bin %in% target_bins) %>% mutate(mass_bin = droplevels(mass_bin)),
+  bins  = 30,
+  facet = "none",
+  title = "Epipelagic: 10^1 g vs 10^5 g (tO2_obis_cell)"
+) + facet_wrap(~ mass_bin, ncol = 2)
+p_focus
+# ggsave(file.path(cfg$out_fig, "state_space_PT_epipelagic_1e1_1e5.png"),
+#        p_focus, width = 10, height = 5, dpi = 250)
+```
+
+
