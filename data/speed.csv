@@ -1,0 +1,143 @@
+species,common_name,family,length,length_type,speed_mpers,speed_lengthtypepers
+Acanthocybium solandri,Wahoo,Scombridae,125, SL,0.4,0.32
+Acrossocheilus paradoxus,NA,Cyprinidae,12, BL,0.48,4
+Argyrosomus regius,Meagre,Sciaenidae,29, TL,1.13,3.8
+Auxis rochei,Bullet tuna,Scombridae,31, SL,0.68,2.19
+Brevoortia tyrannus,Atlantic menhaden,Alosidae,25, SL,0.13,0.51
+Carassius auratus,Goldfish,Cyprinidae,6, TL,0.42,7
+Carassius auratus,Goldfish,Cyprinidae,9, TL,0.62,6.89
+Carassius auratus,Goldfish,Cyprinidae,9, TL,0.7,7.78
+Carassius auratus,Goldfish,Cyprinidae,11, TL,0.63,5.73
+Carassius auratus,Goldfish,Cyprinidae,14, TL,0.8,5.71
+Carcharhinus leucas,Bull shark,Carcharhinidae,173, SL,1.3,0.75
+Carcharhinus melanopterus,Blacktip reef shark,Carcharhinidae,75, SL,0.77,1.03
+Catostomus occidentalis,Sacramento sucker,Catostomidae,19.1, TL,0.47,2.46
+Catostomus occidentalis,Sacramento sucker,Catostomidae,20, TL,0.48,2.4
+Catostomus occidentalis,Sacramento sucker,Catostomidae,20.9, TL,0.51,2.44
+Cetorhinus maximus,Basking shark,Cetorhinidae,700, SL,0.77,0.11
+Chelidonichthys cuculus,Red gurnard,Triglidae,19, TL,0.47,2.4
+Chelon ramada,Thinlip grey mullet,Mugilidae,26, TL,0.61,2.3
+Chromis punctipinnis,Blacksmith,Pomacentridae,8, SL,0.48,6
+Coryphaena hippurus,Common dolphinfish,Coryphaenidae,67, SL,0.56,0.8400000000000001
+Cymatogaster aggregata,Shiner perch,Embiotocidae,9, SL,0.44,4.94
+Cyprinus carpio,Common carp,Cyprinidae,11, TL,0.59,5.2
+Echiichthys vipera,Lesser weever,Trachinidae,22, TL,0.4,1.8
+Embiotoca jacksoni,Black perch,Embiotocidae,14, SL,0.49,3.4899999999999998
+Esox lucius,Northern pike,Esocidae,37, TL,1.44,3.9
+Euthynnus affinis,Kawakawa,Scombridae,36, SL,0.76,2.11
+Gadus morhua,Atlantic cod,Gadidae,27, BL,0.39,1.44
+Gadus morhua,Atlantic cod,Gadidae,27, BL,0.53,1.95
+Gasterosteus aculeatus,Three-spined stickleback,Gasterosteidae,4.9, TL,0.2,4
+Ginglymostoma cirratum,Nurse shark,Ginglymostomatidae,193, SL,0.75,0.39
+Hyperprosopon argenteum,Walleye surfperch,Embiotocidae,13, SL,0.4,3.06
+Hypsurus caryi,Rainbow seaperch,Embiotocidae,13, SL,0.4,3.04
+Katsuwonus pelamis,Skipjack tuna,Scombridae,38, SL,0.59,1.55
+Katsuwonus pelamis,Skipjack tuna,Scombridae,39, SL,0.84,2.15
+Katsuwonus pelamis,Skipjack tuna,Scombridae,48, SL,0.72,1.5
+Lavinia exilicauda,Hitch,Leuciscidae,23.7, TL,0.57,2.4
+Lavinia exilicauda,Hitch,Leuciscidae,26, TL,0.39,1.5
+Leucaspius delineatus,Belica,Leuciscidae,2.2, BL,0.35,15.7
+Leucaspius delineatus,Belica,Leuciscidae,2.7, BL,0.55,20.3
+Leucaspius delineatus,Belica,Leuciscidae,3.9, BL,0.66,16.8
+Leucaspius delineatus,Belica,Leuciscidae,5.8, BL,0.75,12.9
+Leuciscus leuciscus,Common dace,Leuciscidae,10, TL,0.3,3
+Leuciscus leuciscus,Common dace,Leuciscidae,10, TL,0.5,5
+Leuciscus leuciscus,Common dace,Leuciscidae,14, TL,0.62,4.430000000000001
+Leuciscus leuciscus,Common dace,Leuciscidae,15, TL,0.8,5.33
+Leuciscus leuciscus,Common dace,Leuciscidae,16, TL,0.73,4.56
+Leuciscus leuciscus,Common dace,Leuciscidae,20, TL,0.81,4.05
+Leuciscus leuciscus,Common dace,Leuciscidae,21, TL,0.9,4.29
+Merlangius merlangus,Whiting,Gadidae,17,NA,0.23,1.3
+Merluccius merluccius,European hake,Merlucciidae,22, TL,0.79,3.5
+Micropterus salmoides,Largemouth black bass,Centrarchidae,21, TL,0.88,4.1
+Morone saxatilis,Striped bass,Moronidae,22, SL,0.41,1.8800000000000001
+Mylopharodon conocephalus,Hardhead,Leuciscidae,22.5, TL,0.51,2.2600000000000002
+Mylopharodon conocephalus,Hardhead,Leuciscidae,24.4, TL,0.57,2.34
+Mylopharodon conocephalus,Hardhead,Leuciscidae,28.5, TL,0.47,1.6500000000000001
+Mylopharyngodon piceus,Black carp,Xenocyprididae,28, TL,0.77,2.75
+Mylopharyngodon piceus,Black carp,Xenocyprididae,49, TL,1.28,2.6
+Negaprion brevirostris,Lemon shark,Carcharhinidae,177, SL,1.04,0.59
+Oncorhynchus gorbuscha,Pink salmon,Salmonidae,64, SL,0.61,0.96
+Oncorhynchus kisutch,Coho salmon,Salmonidae,5, TL,0.06,1.1
+Oncorhynchus kisutch,Coho salmon,Salmonidae,5, TL,0.28,5.5
+Oncorhynchus kisutch,Coho salmon,Salmonidae,56, TL,1.89,3.3699999999999997
+Oncorhynchus kisutch,Coho salmon,Salmonidae,56, TL,1.9,3.4
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,10, TL,0.32,3.2
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,15, TL,0.4,2.67
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,20, TL,0.6,3
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,28, TL,0.28,1.01
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,28, TL,0.47,1.6900000000000002
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,28, TL,0.66,2.36
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,28, TL,0.7,2.5
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,28, TL,0.85,3.04
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,28, TL,1.04,3.72
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,28, TL,1.23,4.39
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,28, TL,1.42,5.07
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,28, TL,1.63,5.81
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,29, TL,0.3,1.03
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,29, TL,0.4,1.3800000000000001
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,29, TL,0.5,1.71
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,29, TL,0.7,2.4
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,29, TL,0.9,3.09
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,30, TL,0.32,1.07
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,30, TL,0.52,1.74
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,30, TL,0.53,1.78
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,30, TL,0.73,2.44
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,30, TL,0.75,2.4899999999999998
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,30, TL,0.94,3.14
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,30, TL,0.96,3.2
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,30, TL,1.15,3.8299999999999996
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,30, TL,1.18,3.92
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,30, TL,1.36,4.53
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,30, TL,1.56,5.2
+Oncorhynchus mykiss,Rainbow trout,Salmonidae,64, TL,2.11,3.3
+Oncorhynchus nerka,Sockeye salmon,Salmonidae,6, TL,0.1,1.7
+Oncorhynchus nerka,Sockeye salmon,Salmonidae,6, TL,0.31,5.1
+Oncorhynchus nerka,Sockeye salmon,Salmonidae,8, SL,0.29,3.65
+Oncorhynchus nerka,Sockeye salmon,Salmonidae,17, TL,0.73,4.3
+Oncorhynchus nerka,Sockeye salmon,Salmonidae,18, TL,0.52,2.9
+Oncorhynchus nerka,Sockeye salmon,Salmonidae,18, TL,0.72,4
+Oncorhynchus nerka,Sockeye salmon,Salmonidae,30, TL,0.96,3.2
+Oncorhynchus nerka,Sockeye salmon,Salmonidae,51, TL,1.53,3
+Oncorhynchus nerka,Sockeye salmon,Salmonidae,63, SL,0.59,0.93
+Oncorhynchus nerka,Sockeye salmon,Salmonidae,67, SL,0.46,0.6799999999999999
+Perca fluviatilis,European perch,Percidae,18,NA,0.66,3.6
+Petromyzon marinus,Sea lamprey,Petromyzontidae,41, TL,0.23,0.5700000000000001
+Petromyzon marinus,Sea lamprey,Petromyzontidae,41, TL,0.36,0.89
+Phanerodon furcatus,White seaperch,Embiotocidae,15, SL,0.46,3.09
+Pollachius virens,Saithe,Gadidae,37, SL,1.26,3.4
+Pomatomus saltatrix,Bluefish,Pomatomidae,22, SL,0.4,1.83
+Ptychocheilus grandis,Sacramento pikeminnow,Leuciscidae,3, TL,0.12,4
+Ptychocheilus grandis,Sacramento pikeminnow,Leuciscidae,22.9, TL,0.4,1.75
+Ptychocheilus grandis,Sacramento pikeminnow,Leuciscidae,23.3, TL,0.5,2.15
+Ptychocheilus grandis,Sacramento pikeminnow,Leuciscidae,24.7, TL,0.57,2.3
+Salmo trutta,Sea trout,Salmonidae,34, TL,0.92,2.7
+Sarda lineolata,Pacific bonito,Scombridae,57, SL,0.88,1.54
+Sarda sarda,Atlantic bonito,Scombridae,16, SL,0.35,2.18
+Scomber japonicus,Chub mackerel,Scombridae,34, SL,0.92,2.7
+Scomber scombrus,Atlantic mackerel,Scombridae,25, TL,0.81,3.2
+Scomber scombrus,Atlantic mackerel,Scombridae,30, SL,0.98,3.27
+Scomber scombrus,Atlantic mackerel,Scombridae,32, SL,0.28,0.8700000000000001
+Scomber scombrus,Atlantic mackerel,Scombridae,32, SL,2.02,6.319999999999999
+Sebastes mystinus,Blue rockfish,Sebastidae,15, SL,0.55,3.64
+Sebastes serranoides,Olive rockfish,Sebastidae,19, SL,0.51,2.67
+Sphyrna tiburo,Bonnethead,Sphyrnidae,70, SL,0.77,1.1
+Sprattus sprattus,European sprat,Clupeidae,12, SL,0.63,5.21
+Tetraodon schoutedeni,NA,Tetraodontidae,3.7, SL,0.23,6.2
+Thunnus albacares,Yellowfin tuna,Scombridae,35, SL,0.46,1.31
+Thunnus albacares,Yellowfin tuna,Scombridae,84, SL,0.65,0.77
+Thunnus albacares,Yellowfin tuna,Scombridae,87, SL,0.5,0.5700000000000001
+Thunnus obesus,Bigeye tuna,Scombridae,36, SL,0.47,1.3
+Thunnus obesus,Bigeye tuna,Scombridae,55, SL,0.6,1.09
+Thunnus thynnus,Atlantic bluefin tuna,Scombridae,213, SL,3.49,1.6400000000000001
+Thunnus thynnus,Atlantic bluefin tuna,Scombridae,241, SL,2.7,1.12
+Thunnus thynnus,Atlantic bluefin tuna,Scombridae,250, SL,2.2,0.88
+Trachurus symmetricus,Pacific jack mackerel,Carangidae,4, TL,0.61,15.3
+Trachurus symmetricus,Pacific jack mackerel,Carangidae,6, TL,0.85,14.2
+Trachurus symmetricus,Pacific jack mackerel,Carangidae,9, TL,1.33,14.8
+Trachurus symmetricus,Pacific jack mackerel,Carangidae,16, TL,1.79,11.2
+Trachurus symmetricus,Pacific jack mackerel,Carangidae,22, TL,2.02,9.2
+Trachurus symmetricus,Pacific jack mackerel,Carangidae,27, TL,2.17,8.05
+Triakis semifasciata,Leopard shark,Triakidae,79, SL,0.56,0.71
+Trisopterus luscus,Pouting,Gadidae,16, TL,0.55,3.3
+Zeus faber,John dory,Zeidae,19, TL,0.3,1.6
