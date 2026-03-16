@@ -1,1 +1,3 @@
-# fishoxygen_BioenergeticBehavior
+# fishoxygen_ABB
+
+Fish Oxygen: Adaptive Bioenergetic-Behavior Model
