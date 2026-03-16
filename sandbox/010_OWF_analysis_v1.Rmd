@@ -34,12 +34,14 @@ plot_dO2 <- 1
 T_range <- c(0, 30)
 O2_range <- c(0, 30)
 
+mass_levels <- c("10^0 g", "10^1 g", "10^2 g", "10^3 g", "10^4 g", "10^5 g", "10^6 g")
+
 mass_levels_ex <- c("10^1 g", "10^5 g")
 mass_labels_ex <- c("w == 10^1~g", "w == 10^5~g")
 
 target_group <- "epipelagic"
 Q_low <- 0.01
-T_segments <- tibble(T_lo = c(0, 10, 20), T_hi = c(10, 20, 30))
+T_segments <- tibble(T_lo = c(5), T_hi = c(15))
 ```
 
 ```{r helpers}
@@ -110,20 +112,21 @@ woa_occ <- inner_join(
     O2_bin = to_bin_center(pO2_kPa, plot_dO2, O2_range)
   ) %>%
   count(T_bin, O2_bin, name = "woa_n") %>%
-  mutate(woa_frac = woa_n / sum(woa_n), rare_woa = woa_frac < 0.01)
+  mutate(woa_frac = woa_n / sum(woa_n), rare_woa = woa_frac < 0.00001)
 ```
 
 ```{r thresholds-by-T}
 min_po2_by_seg <- tO2_obis_cell %>%
-  filter(group == target_group, mass_bin %in% mass_levels_ex) %>%
+  filter(group == target_group, mass_bin %in% mass_levels) %>%
   mutate(k = parse_k_from_mass_bin(mass_bin)) %>%
   tidyr::crossing(T_segments) %>%
   filter(T_bin >= T_lo, T_bin < T_hi, is.finite(O2_bin), is.finite(n), n > 0) %>%
-  group_by(mass_bin, T_lo, T_hi) %>%
+  group_by(mass_bin, k, T_lo, T_hi) %>%
   summarise(
     pO2_min_kPa = weighted_log_quantile_po2(O2_bin, n, q = Q_low),
     .groups = "drop"
-  )
+  ) %>%
+  mutate(mass_g = 10^k)
 
 min_po2_by_seg
 ```
@@ -143,6 +146,7 @@ grid_df <- tidyr::crossing(
   mutate(rare_woa = if_else(is.na(rare_woa), TRUE, rare_woa))
 
 seg_plot <- min_po2_by_seg %>%
+  filter(mass_bin %in% mass_levels_ex) %>%
   mutate(mass_lab = factor(mass_bin, levels = mass_levels_ex, labels = mass_labels_ex))
 
 ggplot() +
@@ -150,12 +154,39 @@ ggplot() +
   geom_tile(data = grid_df %>% filter(!is.na(n), n > 0), aes(T_bin, O2_bin, fill = n), width = plot_dT, height = plot_dO2) +
   geom_segment(data = seg_plot,
                aes(x = T_lo, xend = T_hi, y = pO2_min_kPa, yend = pO2_min_kPa),
-               linewidth = 1.5, color = "#67A5CA") +
+               linewidth = 2, color = "black") +
   facet_grid(. ~ mass_lab, labeller = label_parsed) +
   scale_fill_blue_counts("Cells") +
   scale_x_continuous(breaks = c(0, 10, 20, 30), limits = T_range, expand = c(0, 0)) +
   scale_y_continuous(breaks = c(0, 10, 20, 30), limits = O2_range, expand = c(0, 0)) +
-  labs(x = axis_lab_T, y = axis_lab_O2,
-       title = "Epipelagic occurrence state space with minimum oxygen thresholds") +
+  labs(x = axis_lab_T, y = axis_lab_O2#,
+       #title = "Epipelagic occurrence state space with minimum oxygen thresholds"
+       ) +
   th
 ```
+
+```{r min-po2-vs-mass}
+ggplot(min_po2_by_seg, aes(x = mass_g, y = pO2_min_kPa)) +
+  geom_point(size = 2, color="#67A5CA") +
+  geom_line(linewidth = 0.8, color="#67A5CA") +
+  scale_x_log10(
+    breaks = 10^(0:6),
+    labels = parse(text = paste0("10^", 0:6)),
+    expand = c(0, 0)
+  ) +
+  scale_y_continuous(
+    limits = c(0, 30),
+    breaks = c(0, 10, 20, 30),
+    expand = c(0, 0)
+  ) +
+  labs(
+    x = "Body mass, w (g)",
+    y = expression(p[O[2]] ~ "threshold (kPa)")
+  ) +
+  th
+```
+
+```{r}
+write.csv(min_po2_by_seg, file=here("data_out", "FWBocc_pO2min.csv"), row.names = FALSE)
+```
+
