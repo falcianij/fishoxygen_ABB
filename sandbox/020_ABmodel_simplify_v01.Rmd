@@ -1,0 +1,201 @@
+
+
+
+
+
+
+
+```{r}
+# ---- Libraries ----
+library(here)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(scales)
+library(patchwork)
+
+# ---- Source the reduced closure functions ----
+source(here("scripts", "reduced_ingestion_closure.R"))
+```
+
+
+```{r}
+# ---- Traits (your example) ----
+trait_list <- list(
+  largePel = list(
+    a_a = 80, b_R = 0.85,
+    a_g = 3, hm = 1,
+    f_m = 0.1, a_m = 1, b_m = 0.75,
+    a_e = 200, b_e = 2/3,
+    a_c = 60, b_c = 0.75, epsAssim = 0.7, alpha = 0.2,
+    T_ref = 10,
+    Q10_m = 2.00, Q10_a = 1.80, Q10_o = 1.50, Q10_c = 2.00
+  )
+)
+tr <- trait_list[["largePel"]]
+```
+
+
+```{r}
+# ---- Panel settings ----
+masses   <- c(1e0, 1e4)               # columns
+T_panels <- c(5, 20)                  # rows
+pO2seq   <- seq(0, 30, by = 0.1)
+B_seq    <- 10^seq(-2, 3, length.out = 400)
+
+# ---- Run reduced surfaces (this is fast vs optimize()) ----
+surf <- compute_state_surface_reduced(
+  tr,
+  masses = masses,
+  Tseq   = T_panels,
+  pO2seq = pO2seq,
+  Bseq   = B_seq,
+  D      = 3,
+  u_prey = 0,
+  normalize_E = FALSE,   # we'll plot raw E_net as E_avail
+  progress = TRUE
+)
+```
+
+
+```{r}
+surf <- as_tibble(surf) %>%
+  mutate(
+    B    = B_used,
+    mass = as.numeric(mass),
+    T    = as.numeric(T),
+    E_avail = E_net / Cmax
+  )
+
+# ---- Masks: black if pO2 < pO2_crit, gray if E_avail < 0 (but above crit) ----
+surf <- surf %>%
+  mutate(
+    mask_black = is.finite(pO2_crit) & pO2 < pO2_crit,
+    mask_gray  = !mask_black & is.finite(E_avail) & (E_avail < 0),
+    E_pos      = if_else(!mask_black & !mask_gray & is.finite(E_avail), E_avail, NA_real_)
+  )
+```
+
+
+```{r}
+# ---- Plot helpers ----
+base_theme <- theme_minimal(base_size = 8) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(colour = "grey50", fill = NA),
+    legend.position = "bottom",
+    legend.box = "horizontal",
+    legend.justification = "center",
+    legend.title = element_text(size=8),
+    legend.text  = element_text(size=6, color="gray30"),
+    axis.ticks = element_line(colour = "grey50"),
+    axis.text.x = element_text(size = 6),
+    axis.text.y = element_text(size = 6)
+  )
+
+strip_y <- function(p) p + theme(axis.title.y = element_blank(),
+                                 axis.text.y  = element_blank())
+strip_x <- function(p) p + theme(axis.title.x = element_blank(),
+                                 axis.text.x  = element_blank())
+```
+
+
+```{r fig.height=4.5, fig.width=3.5, warning=FALSE}
+B_limits <- range(B_seq, finite = TRUE)
+B_breaks <- 10^seq(floor(log10(B_limits[1])), ceiling(log10(B_limits[2])), by = 1)
+
+# Panel order: top row = higher T; left col = smaller mass
+combos <- tidyr::expand_grid(
+  T = sort(unique(surf$T), decreasing = TRUE),
+  mass = sort(unique(surf$mass))
+) %>% mutate(key = paste0("T=", T, " | m=", signif(mass, 3)))
+
+plots <- vector("list", nrow(combos))
+names(plots) <- combos$key
+
+# Color scale (positive E_avail only)
+Emax <- max(surf$E_pos, na.rm = TRUE)
+
+for (i in seq_len(nrow(combos))) {
+  T_i <- combos$T[i]
+  m_i <- combos$mass[i]
+  nm  <- combos$key[i]
+
+  df_i <- surf %>% filter(T == T_i, mass == m_i)
+
+  df_black <- df_i %>% filter(mask_black)
+  df_gray  <- df_i %>% filter(mask_gray)
+  df_pos   <- df_i %>% filter(is.finite(E_pos))
+
+  p <- ggplot() +
+    # positive E_avail surface
+    geom_raster(data = df_pos, aes(x = B, y = pO2, fill = E_pos), interpolate = FALSE) +
+
+    # dashed f contours
+    geom_contour(
+      inherit.aes = FALSE,
+      data = df_i %>% filter(is.finite(f), is.finite(B), is.finite(pO2)),
+      aes(x = B, y = pO2, z = f),
+      breaks = seq(0, 1, by = 0.2),
+      colour = "black", linewidth = 0.30, linetype = "dashed"
+    ) +
+    # thick near-saturation
+    geom_contour(
+      inherit.aes = FALSE,
+      data = df_i %>% filter(is.finite(f), is.finite(B), is.finite(pO2)),
+      aes(x = B, y = pO2, z = f),
+      breaks = 0.99,
+      colour = "black", linewidth = 0.45
+    ) +
+    
+    # black mask (pO2 < pO2_crit)
+    geom_raster(data = df_black, aes(x = B, y = pO2), fill = "black", interpolate = FALSE) +
+    # gray mask (E_avail < 0 above crit)
+    geom_raster(data = df_gray, aes(x = B, y = pO2), fill = "gray60", interpolate = FALSE) +
+
+    scale_fill_gradient(
+      low = "white", high = "#67A5CA",
+      limits = c(0, 1),
+      oob = scales::squish,
+      name = expression(E[avail])
+    ) +
+
+    labs(x = "Prey biomass B", y = expression("Oxygen,"~p[O[2]]~"(kPa)")) +
+    scale_x_log10(
+      limits = B_limits,
+      breaks = B_breaks,
+      labels = scales::trans_format("log10", scales::math_format(10^.x)),
+      expand = c(0, 0)
+    ) +
+    scale_y_continuous(breaks = seq(min(pO2seq), max(pO2seq), by = 5), expand = c(0, 0)) +
+    base_theme +
+    theme(aspect.ratio = 1)
+
+  # Optional: add a title per panel
+  # p <- p + ggtitle(paste0("T=", T_i, "°C, m=", format(m_i, scientific = TRUE), " g")) +
+  #   theme(plot.title = element_text(size = 8))
+
+  plots[[nm]] <- p
+}
+
+# Arrange 2x2 with shared legend (patchwork)
+# combos$key order: (T high, m small), (T high, m large), (T low, m small), (T low, m large)
+p11 <- plots[[ combos$key[3] ]]
+p12 <- plots[[ combos$key[4] ]]
+p21 <- plots[[ combos$key[1] ]]
+p22 <- plots[[ combos$key[2] ]]
+
+# strip axes to match your Fig.3 layout
+p11 <- strip_x(p11)
+p12 <- strip_x(strip_y(p12))
+p22 <- strip_y(p22)
+
+grid_E_2x2 <- ((p11 | p12) / (p21 | p22)) +
+  plot_layout(guides = "collect") &
+  theme(legend.position = "bottom",
+        legend.direction = "horizontal",
+        legend.justification = "center")
+
+grid_E_2x2
+```
+

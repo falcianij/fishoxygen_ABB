@@ -1,0 +1,3098 @@
+---
+title: "01_model_test"
+output: html_document
+date: "2025-10-17"
+---
+
+```{r}
+library(here)
+
+library(tidyverse)
+library(plotly)
+
+library(interp)
+library(scales)
+library(metR)
+library(ggh4x)
+library(ggtext)
+
+library(patchwork) #
+library(grid)      #
+
+# Source model functions (relative to project root)
+file_sources = list.files(c(here("scripts")), pattern="*.R$", full.names=TRUE, ignore.case=TRUE)
+sapply(file_sources, source, .GlobalEnv)
+#source(here("scripts", "model_functions.R"), here("scripts", "analysis_functions.R"))
+```
+
+
+# Traits
+
+```{r}
+trait_list <- list(
+  largePel = list(
+    a_a = 80, b_R = 0.85, #0.58,                                                 # active metabolism scale, speed geometry (p = 3 - b_R); a_a = 80
+    a_g = 3, hm = 1,                                                            # gill diffusion: S = A_g*(pO2_env - pO2_int)*Q10_o/hm
+    f_m = 0.1, a_m = 1,  b_m = 0.75,                                            # basal metabolism scale (fraction of a_c); f_m = 0.1
+    a_e = 200, b_e=2/3, #200 #2/3                                                         # encounter
+    a_c = 60, b_c = 0.75, epsAssim = 0.7, alpha = 0.2,                          # consumption (+ SDA fraction alpha)
+    T_ref = 10,
+    Q10_m = 2.00, Q10_a = 1.80, Q10_o = 1.50, Q10_c = 2.00                      # temperature Q10s
+  )
+)
+
+group <- "largePel"
+tr <- trait_list[[group]]
+```
+
+
+# Theme
+
+```{r}
+# --- Minimal square theme with grey50 outline ---------------------------
+# Theme
+base_theme <- theme_minimal(base_size = 8) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(colour = "grey50", fill = NA),
+    legend.position = "bottom",
+    legend.box = "horizontal",
+    legend.justification = "center",
+    legend.title = element_text(size=8),
+    legend.text  = element_text(size=6, color="gray30"),
+    axis.ticks       = element_line(colour = "grey50"),
+    #axis.ticks.length = unit(3, "pt"),
+    axis.text.x = element_text(size = 6),
+    axis.text.y = element_text(size = 6)
+  )
+
+# --- Isolines ---
+panel_breaks_pos <- function(df, zcol, n_lines = 3) {
+  z <- df[[zcol]]
+  z <- z[is.finite(z) & z > 0]
+  if (!length(z)) return(numeric())
+  rng  <- range(z)
+  brks <- seq(rng[1], rng[2], length.out = n_lines + 2)
+  brks[2:(length(brks) - 1)]
+}
+
+# Legend helper (slim framed bar)
+legend_bar_guide <- function(breaks, labels) {
+  guide_colorbar(
+    direction      = "horizontal",
+    title.position = "top",
+    label.position = "bottom",
+    ticks          = TRUE,
+    frame.colour   = "grey50",
+    #ticks.length = unit(3, "pt"),
+    frame.linewidth= 0.5,
+    legend.ticks.length = unit(c(-10, 0), 'pt'),
+    #barheight      = grid::unit(4, "mm"),
+    #barwidth       = grid::unit(10, "lines"),  # try to span the panel width
+    # If your ggplot2 ignores npc here, bump this number instead:
+    # barwidth    = grid::unit(36, "lines")
+    ticks.colour   = "grey50"
+  )
+}
+
+# --- Optional: hide y labels/text when you don't want them ---------------
+theme_hide_y_labels <- function() {
+  theme(axis.title.y = element_blank(),
+        axis.text.y  = element_blank())
+}
+```
+
+
+
+# Fig. 2
+
+```{r}
+# Parameters
+mass   <- 1e6                                                                   # [g] 1e3
+T      <- 10                                                                    # [°C]
+f_seq  <- seq(0.0, 1.0, by = 0.002)                                             # []
+pO2seq <- seq(0, 30, by=0.05)                                                   # [kPa]
+
+# Calculate surface
+surf_Fbudgets <- compute_state_surface(
+  tr,                                                                           # consider re-adjusting if you add other functional groups
+  masses = mass,
+  Tseq = T,
+  pO2seq = pO2seq,
+  preys = f_seq,
+  prey_units = "prey_index", 
+  pair_mode = "cross"
+)
+
+surf_Fbudgets <- add_B_gradients(surf_Fbudgets, tr, method = "perturb", use_norm  = TRUE, prey_axis = "B", d_rel = 0.05, progress = TRUE)
+```
+
+
+```{r}
+check_transect <- function(tr, mass, Tval, pO2val,
+                           fseq = seq(0, 0.99, length.out = 100)) {
+  dat <- purrr::map_dfr(fseq, function(fref) {
+    B <- B_from_f(fref, mass, tr,
+                     T_ref = tr$T_ref, pO2_ref = pO2val,
+                     U_lo = 1e-3, U_mech = 5,
+                     enforce_O2_feasible = TRUE,
+                     eps_f = 1e-8)
+    st <- find_U_opt(pO2_env = pO2val, T = Tval, m = mass, prey = B, tr = tr)
+    tibble::tibble(
+      B      = B,
+      f      = fref,
+      E_net  = st$E_net / st$Cmax,
+      U_opt  = st$U_opt,
+      O2_sup = st$O2_supply,
+      O2_dem = st$O2_demand
+    )
+  }) %>%
+    mutate(O2_margin = O2_dem / O2_sup)
+
+  p1 <- ggplot(dat, aes(B, E_net)) +
+    geom_line() +
+    scale_x_log10() +
+    geom_hline(yintercept = 0, linetype = 2)
+
+  p2 <- ggplot(dat, aes(B, O2_margin)) +
+    geom_line() +
+    scale_x_log10() +
+    geom_hline(yintercept = 0, linetype = 2)
+
+  list(data = dat, p_E = p1, p_O2 = p2)
+}
+
+
+res <- check_transect(tr, mass = 1e0, Tval = 10, pO2val = 10)
+res$p_E   # E vs B (log B)
+res$p_O2  # O2 margin vs B
+
+
+res <- check_transect(tr, mass = 1e4, Tval = 10, pO2val = 10)
+res$p_E   # E vs B (log B)
+res$p_O2  # O2 margin vs B
+```
+
+
+```{r warning=FALSE}
+# Subplots
+## ---Consumption---
+surf_Fbudgets$consump_norm <- surf_Fbudgets$consump / surf_Fbudgets$Cmax
+
+consump_na  <- dplyr::filter(surf_Fbudgets, !is.finite(consump_norm) | is.na(consump_norm))
+consump_neg <- dplyr::filter(surf_Fbudgets,  is.finite(consump_norm) & consump_norm < 0)
+consump_pos <- dplyr::filter(surf_Fbudgets,  is.finite(consump_norm) & consump_norm >= 0) %>%
+  dplyr::mutate(consump_pos = consump_norm)
+
+E_breaks <- seq(0, 1, by = 0.2)
+E_labels <- sprintf("%.1f", E_breaks)
+
+p_consump_Fbudgets <- ggplot() +
+  geom_raster(data = consump_na,  aes(f_ref, pO2), fill = "black", interpolate = TRUE) + # NA regions: gray, here 
+  geom_raster(data = consump_neg, aes(f_ref, pO2), fill = "black", interpolate = TRUE) + # NEGATIVE region: gray
+  geom_raster(data = consump_pos, aes(f_ref, pO2, fill = pmin(consump_pos, 1)), interpolate = TRUE) + # POSITIVE region: white -> blue gradient (capped to per-column vmax)
+  scale_fill_gradient(
+    low = "white", high = "#67A5CA", na.value = "black",
+    limits = c(0, 0.7), breaks = E_breaks, labels = E_labels,                     # <- extremes tied to max positive
+    oob = scales::squish,                                                       # <- clamp out-of-bounds values
+    #name   = expression("Available energy,"~nu~"(normalized by " * C[max] * ")"),
+    name   = expression("Consumption"),
+    guide = legend_bar_guide(E_breaks, E_labels)
+  ) +
+  geom_contour(
+    inherit.aes = FALSE,
+    data = consump_pos, aes(x = f_ref, y = pO2, z = consump_pos),
+    breaks = seq(0, 0.7, length.out=5), colour = "black", linewidth = 0.3, alpha = 1, linetype="dashed") +
+  labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~"(kPa)")#,
+       #title = paste("Available Energy")
+       ) +
+  scale_x_continuous(breaks = seq(min(f_seq), max(f_seq), by = 0.2), expand = c(0, 0)) +
+  scale_y_continuous(breaks = seq(min(pO2seq), max(pO2seq), by = 10), expand = c(0, 0)) +
+  base_theme + 
+  theme(aspect.ratio=1,
+        legend.position = "bottom",
+        legend.box = "horizontal")
+
+p_consump_Fbudgets
+
+## ---Total Metabolism (including SDA)---
+surf_Fbudgets <- surf_Fbudgets %>%
+  mutate(M_act_zero = replace_na(M_act, 0),
+         M_m_zero = replace_na(M_m, min(M_m, na.rm = TRUE)),
+         M_sda = 0.2 * surf_Fbudgets$consump,
+         )
+surf_Fbudgets$metab_norm <- (surf_Fbudgets$M_m + surf_Fbudgets$M_act_zero + surf_Fbudgets$M_sda) / surf_Fbudgets$Cmax
+
+metab_na  <- dplyr::filter(surf_Fbudgets, !is.finite(metab_norm) | is.na(metab_norm))
+metab_neg <- dplyr::filter(surf_Fbudgets,  is.finite(metab_norm) & metab_norm < 0)
+metab_pos <- dplyr::filter(surf_Fbudgets,  is.finite(metab_norm) & metab_norm >= 0) %>%
+  dplyr::mutate(metab_pos = metab_norm)
+
+E_breaks <- seq(0, 1, by = 0.2)
+E_labels <- sprintf("%.1f", E_breaks)
+
+p_metabTot_Fbudgets <- ggplot() +
+  geom_raster(data = metab_na,  aes(f_ref, pO2), fill = "black", interpolate = TRUE) + # NA regions: gray, here 
+  geom_raster(data = metab_neg, aes(f_ref, pO2), fill = "black", interpolate = TRUE) + # NEGATIVE region: gray
+  geom_raster(data = metab_pos, aes(f_ref, pO2, fill = pmin(metab_pos, 1)), interpolate = TRUE) + # POSITIVE region: white -> blue gradient (capped to per-column vmax)
+  scale_fill_gradient(
+    low = "white", high = "#67A5CA", na.value = "black",
+    limits = c(0, 0.3), breaks = E_breaks, labels = E_labels,                     # <- extremes tied to max positive
+    oob = scales::squish,                                                       # <- clamp out-of-bounds values
+    #name   = expression("Available energy,"~nu~"(normalized by " * C[max] * ")"),
+    name   = expression("Total Metabolism (including SDA)"),
+    guide = legend_bar_guide(E_breaks, E_labels)
+  ) +
+  geom_contour(
+    inherit.aes = FALSE,
+    data = metab_pos, aes(x = f_ref, y = pO2, z = metab_pos),
+    breaks = seq(0.1, 0.2, length.out=5), colour = "black", linewidth = 0.3, alpha = 1, linetype="dashed") +
+  labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~"(kPa)")#,
+       #title = paste("Available Energy")
+       ) +
+  scale_x_continuous(breaks = seq(min(f_seq), max(f_seq), by = 0.2), expand = c(0, 0)) +
+  scale_y_continuous(breaks = seq(min(pO2seq), max(pO2seq), by = 10), expand = c(0, 0)) +
+  base_theme + 
+  theme(aspect.ratio=1,
+        legend.position = "bottom",
+        legend.box = "horizontal")
+
+p_metabTot_Fbudgets
+
+
+## ---Factorial aerobic scope (FAS)---
+surf_Fbudgets <- surf_Fbudgets %>%
+  mutate(M_act_zero = replace_na(M_act, 0),
+         M_m_zero = replace_na(M_m, min(M_m, na.rm = TRUE)),
+         M_sda_zero = replace_na(0.2 * surf_Fbudgets$consump, 0),
+         )
+surf_Fbudgets$FAS <- (surf_Fbudgets$M_m_zero + surf_Fbudgets$M_act_zero + surf_Fbudgets$M_sda_zero) / surf_Fbudgets$M_m_zero
+
+metab_na  <- dplyr::filter(surf_Fbudgets, !is.finite(FAS) | is.na(FAS))
+metab_neg <- dplyr::filter(surf_Fbudgets,  is.finite(FAS) & FAS < 0)
+metab_pos <- dplyr::filter(surf_Fbudgets,  is.finite(FAS) & FAS >= 0) %>%
+  dplyr::mutate(metab_pos = metab_norm)
+
+E_breaks <- seq(1, 3, by = 0.5)
+E_labels <- sprintf("%.1f", E_breaks)
+
+p_FAS_Fbudgets <- ggplot() +
+  geom_raster(data = metab_na,  aes(f_ref, pO2), fill = "black", interpolate = TRUE) + # NA regions: gray, here 
+  geom_raster(data = metab_neg, aes(f_ref, pO2), fill = "black", interpolate = TRUE) + # NEGATIVE region: gray
+  geom_raster(data = metab_pos, aes(f_ref, pO2, fill = pmin(metab_pos, 1)), interpolate = TRUE) + # POSITIVE region: white -> blue gradient (capped to per-column vmax)
+  scale_fill_gradient(
+    low = "white", high = "#67A5CA", na.value = "black",
+    limits = c(1, 3), breaks = E_breaks, labels = E_labels,                     # <- extremes tied to max positive
+    oob = scales::squish,                                                       # <- clamp out-of-bounds values
+    #name   = expression("Available energy,"~nu~"(normalized by " * C[max] * ")"),
+    name   = expression("FAS"),
+    guide = legend_bar_guide(E_breaks, E_labels)
+  ) +
+  geom_contour(
+    inherit.aes = FALSE,
+    data = metab_pos, aes(x = f_ref, y = pO2, z = metab_pos),
+    breaks = seq(0.1, 0.2, length.out=5), colour = "black", linewidth = 0.3, alpha = 1, linetype="dashed") +
+  labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~"(kPa)")#,
+       #title = paste("Available Energy")
+       ) +
+  scale_x_continuous(breaks = seq(min(f_seq), max(f_seq), by = 0.2), expand = c(0, 0)) +
+  scale_y_continuous(breaks = seq(min(pO2seq), max(pO2seq), by = 10), expand = c(0, 0)) +
+  base_theme + 
+  theme(aspect.ratio=1,
+        legend.position = "bottom",
+        legend.box = "horizontal")
+
+p_FAS_Fbudgets
+
+
+## ---Metabolism---
+surf_Fbudgets <- surf_Fbudgets %>%
+  mutate(M_act_zero = replace_na(M_act, 0),
+         M_m_zero = replace_na(M_m, min(M_m, na.rm = TRUE)))
+surf_Fbudgets$metab_norm <- (surf_Fbudgets$M_m + surf_Fbudgets$M_act_zero) / surf_Fbudgets$Cmax
+
+metab_na  <- dplyr::filter(surf_Fbudgets, !is.finite(metab_norm) | is.na(metab_norm))
+metab_neg <- dplyr::filter(surf_Fbudgets,  is.finite(metab_norm) & metab_norm < 0)
+metab_pos <- dplyr::filter(surf_Fbudgets,  is.finite(metab_norm) & metab_norm >= 0) %>%
+  dplyr::mutate(metab_pos = metab_norm)
+
+E_breaks <- seq(0, 1, by = 0.2)
+E_labels <- sprintf("%.1f", E_breaks)
+
+p_metab_Fbudgets <- ggplot() +
+  geom_raster(data = metab_na,  aes(f_ref, pO2), fill = "black", interpolate = TRUE) + # NA regions: gray, here 
+  geom_raster(data = metab_neg, aes(f_ref, pO2), fill = "black", interpolate = TRUE) + # NEGATIVE region: gray
+  geom_raster(data = metab_pos, aes(f_ref, pO2, fill = pmin(metab_pos, 1)), interpolate = TRUE) + # POSITIVE region: white -> blue gradient (capped to per-column vmax)
+  scale_fill_gradient(
+    low = "white", high = "#67A5CA", na.value = "black",
+    limits = c(0, 0.2), breaks = E_breaks, labels = E_labels,                     # <- extremes tied to max positive
+    oob = scales::squish,                                                       # <- clamp out-of-bounds values
+    #name   = expression("Available energy,"~nu~"(normalized by " * C[max] * ")"),
+    name   = expression("Metabolism"),
+    guide = legend_bar_guide(E_breaks, E_labels)
+  ) +
+  geom_contour(
+    inherit.aes = FALSE,
+    data = metab_pos, aes(x = f_ref, y = pO2, z = metab_pos),
+    breaks = seq(0.1, 0.2, length.out=5), colour = "black", linewidth = 0.3, alpha = 1, linetype="dashed") +
+  labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~"(kPa)")#,
+       #title = paste("Available Energy")
+       ) +
+  scale_x_continuous(breaks = seq(min(f_seq), max(f_seq), by = 0.2), expand = c(0, 0)) +
+  scale_y_continuous(breaks = seq(min(pO2seq), max(pO2seq), by = 10), expand = c(0, 0)) +
+  base_theme + 
+  theme(aspect.ratio=1,
+        legend.position = "bottom",
+        legend.box = "horizontal")
+
+p_metab_Fbudgets
+
+
+## ---Activity Fraction---
+surf_Fbudgets <- surf_Fbudgets %>%
+  mutate(act_fraction= replace_na(M_act, 0),
+         M_m_zero = replace_na(M_m, min(M_m, na.rm = TRUE)))
+surf_Fbudgets$act_fraction <- surf_Fbudgets$M_act_zero / (surf_Fbudgets$M_act_zero + surf_Fbudgets$M_m)
+
+metab_na  <- dplyr::filter(surf_Fbudgets, !is.finite(act_fraction) | is.na(act_fraction))
+metab_neg <- dplyr::filter(surf_Fbudgets,  is.finite(act_fraction) & act_fraction < 0)
+metab_pos <- dplyr::filter(surf_Fbudgets,  is.finite(act_fraction) & act_fraction >= 0) %>%
+  dplyr::mutate(actfraction_pos = act_fraction)
+
+E_breaks <- seq(0, max(metab_pos$actfraction_pos), by = 0.1)
+E_labels <- sprintf("%.1f", E_breaks)
+
+p_actFraction_Fbudgets <- ggplot() +
+  geom_raster(data = metab_na,  aes(f_ref, pO2), fill = "black", interpolate = TRUE) + # NA regions: gray, here 
+  geom_raster(data = metab_neg, aes(f_ref, pO2), fill = "black", interpolate = TRUE) + # NEGATIVE region: gray
+  geom_raster(data = metab_pos, aes(f_ref, pO2, fill = pmin(actfraction_pos, 1)), interpolate = TRUE) + # POSITIVE region: white -> blue gradient (capped to per-column vmax)
+  scale_fill_gradient(
+    low = "white", high = "#67A5CA", na.value = "black",
+    limits = c(0, max(metab_pos$actfraction_pos)), breaks = E_breaks, labels = E_labels,                     # <- extremes tied to max positive
+    oob = scales::squish,                                                       # <- clamp out-of-bounds values
+    #name   = expression("Available energy,"~nu~"(normalized by " * C[max] * ")"),
+    name   = expression("Activity fraction"),
+    guide = legend_bar_guide(E_breaks, E_labels)
+  ) +
+  geom_contour(
+    inherit.aes = FALSE,
+    data = metab_pos, aes(x = f_ref, y = pO2, z = actfraction_pos),
+    breaks = seq(0, max(metab_pos$actfraction_pos), length.out=5), colour = "black", linewidth = 0.3, alpha = 1, linetype="dashed") +
+  geom_contour(
+    inherit.aes = FALSE,
+    data = metab_pos, aes(x = f_ref, y = pO2, z = actfraction_pos),
+    breaks = 0.3, colour = "black", linewidth = 0.5, alpha = 1) + ###
+  labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~"(kPa)")#,
+       #title = paste("Available Energy")
+       ) +
+  scale_x_continuous(breaks = seq(min(f_seq), max(f_seq), by = 0.2), expand = c(0, 0)) +
+  scale_y_continuous(breaks = seq(min(pO2seq), max(pO2seq), by = 10), expand = c(0, 0)) +
+  base_theme + 
+  theme(aspect.ratio=1,
+        legend.position = "bottom",
+        legend.box = "horizontal")
+
+p_actFraction_Fbudgets
+
+
+## ---Available energy---
+Eavail_na  <- dplyr::filter(surf_Fbudgets, !is.finite(E_net_norm) | is.na(E_net_norm))
+Eavail_neg <- dplyr::filter(surf_Fbudgets,  is.finite(E_net_norm) & E_net_norm < 0)
+Eavail_pos <- dplyr::filter(surf_Fbudgets,  is.finite(E_net_norm) & E_net_norm >= 0) %>%
+  dplyr::mutate(E_pos = E_net_norm)
+
+E_breaks <- seq(0, 1, by = 0.2)
+E_labels <- sprintf("%.1f", E_breaks)
+
+p_Eavail_Fbudgets <- ggplot() +
+  geom_raster(data = Eavail_na,  aes(f_ref, pO2), fill = "gray60", interpolate = TRUE) + # NA regions: gray, here 
+  geom_raster(data = Eavail_neg, aes(f_ref, pO2), fill = "gray60", interpolate = TRUE) + # NEGATIVE region: gray
+  geom_raster(data = Eavail_pos, aes(f_ref, pO2, fill = pmin(E_pos, 1)), interpolate = TRUE) + # POSITIVE region: white -> blue gradient (capped to per-column vmax)
+  scale_fill_gradient(
+    low = "white", high = "#67A5CA", na.value = "gray60",
+    limits = c(0, 1), breaks = E_breaks, labels = E_labels,                     # <- extremes tied to max positive
+    oob = scales::squish,                                                       # <- clamp out-of-bounds values
+    #name   = expression("Available energy,"~nu~"(normalized by " * C[max] * ")"),
+    name   = expression("Available energy"),
+    guide = legend_bar_guide(E_breaks, E_labels)
+  ) +
+  geom_contour(
+    inherit.aes = FALSE,
+    data = Eavail_pos, aes(x = f_ref, y = pO2, z = E_pos),
+    breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0), colour = "black", linewidth = 0.3, alpha = 1, linetype="dashed") +
+  labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~"(kPa)")#,
+       #title = paste("Available Energy")
+       ) +
+  scale_x_continuous(breaks = seq(min(f_seq), max(f_seq), by = 0.2), expand = c(0, 0)) +
+  scale_y_continuous(breaks = seq(min(pO2seq), max(pO2seq), by = 10), expand = c(0, 0)) +
+  base_theme + 
+  theme(aspect.ratio=1,
+        legend.position = "bottom",
+        legend.box = "horizontal")
+
+p_Eavail_Fbudgets
+# Example A: 6×4 inches, 300 dpi PNG
+# ggsave("F_Eavail_budgets.png", plot = p_Eavail_Fbudgets,
+#        width = 7, height = 5, units = "in", dpi = 500)
+
+
+## ---Feeding level---
+Eavail_na  <- dplyr::filter(surf_Fbudgets, !is.finite(f) | is.na(f))
+Eavail_neg <- dplyr::filter(surf_Fbudgets,  is.finite(f) & f < 0)
+Eavail_pos <- dplyr::filter(surf_Fbudgets,  is.finite(f) & f >= 0) %>%
+  dplyr::mutate(E_pos = f)
+
+E_breaks <- seq(0, 1, by = 0.2)
+E_labels <- sprintf("%.1f", E_breaks)
+
+p_flvl_Fbudgets <- ggplot() +
+  geom_raster(data = Eavail_na,  aes(f_ref, pO2), fill = "gray60", interpolate = TRUE) + # NA regions: gray, here 
+  geom_raster(data = Eavail_neg, aes(f_ref, pO2), fill = "gray60", interpolate = TRUE) + # NEGATIVE region: gray
+  geom_raster(data = Eavail_pos, aes(f_ref, pO2, fill = pmin(E_pos, 1)), interpolate = TRUE) + # POSITIVE region: white -> blue gradient (capped to per-column vmax)
+  scale_fill_gradient(
+    low = "white", high = "#67A5CA", na.value = "gray60",
+    limits = c(0, 1), breaks = E_breaks, labels = E_labels,                     # <- extremes tied to max positive
+    oob = scales::squish,                                                       # <- clamp out-of-bounds values
+    #name   = expression("Available energy,"~nu~"(normalized by " * C[max] * ")"),
+    name   = expression("Realized feeding level"),
+    guide = legend_bar_guide(E_breaks, E_labels)
+  ) +
+  geom_contour(
+    inherit.aes = FALSE,
+    data = Eavail_pos, aes(x = f_ref, y = pO2, z = E_pos),
+    breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0), colour = "black", linewidth = 0.3, alpha = 1, linetype="dashed") +
+  labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~"(kPa)")#,
+       #title = paste("Available Energy")
+       ) +
+  scale_x_continuous(breaks = seq(min(f_seq), max(f_seq), by = 0.2), expand = c(0, 0)) +
+  scale_y_continuous(breaks = seq(min(pO2seq), max(pO2seq), by = 10), expand = c(0, 0)) +
+  base_theme + 
+  theme(aspect.ratio=1,
+        legend.position = "bottom",
+        legend.box = "horizontal")
+
+p_flvl_Fbudgets
+
+
+## ---Oxygen supply---
+O2supply_pos <- dplyr::filter(surf_Fbudgets,  is.finite(O2_supply) & O2_supply >= 0) %>%
+  dplyr::mutate(O2supply_pos = O2_supply)
+
+O_breaks <- seq(0, max(O2supply_pos$O2supply_pos), length.out=5)
+O_labels <- sprintf("%.1f", O_breaks)
+
+p_o2supply_Fbudgets <- ggplot() + 
+  geom_raster(data = O2supply_pos, aes(f_ref, pO2, fill = O2supply_pos), interpolate = TRUE) + # POSITIVE region: white -> blue gradient (capped to per-column vmax)
+  scale_fill_gradient(
+    low = "white", high = "#8a5796", na.value = "black",
+    limits = c(0, max(O2supply_pos$O2supply_pos)), breaks = O_breaks, labels = O_labels,                     # <- extremes tied to max positive
+    oob = scales::squish,                                                        # <- clamp out-of-bounds values
+    #name   = expression("Oxygen surplus,"~S - D ~ "(normalized by " * S[max] * ")"),
+    name   = expression("Oxygen supply"),
+    guide = legend_bar_guide(O_breaks, O_labels)
+  ) +
+  geom_contour(
+    inherit.aes = FALSE,
+    data = O2supply_pos, aes(x = f_ref, y = pO2, z = O2supply_pos),
+    breaks = O_breaks, colour = "black", linewidth = 0.3, alpha = 1, linetype="dashed") +
+  labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~"(kPa)")#,
+       #title = paste("Oxygen Surplus")
+       ) +
+  scale_x_continuous(breaks = seq(min(f_seq), max(f_seq), by = 0.2), expand = c(0, 0)) +
+  scale_y_continuous(breaks = seq(min(pO2seq), max(pO2seq), by = 10), expand = c(0, 0)) +
+  base_theme + 
+  theme(aspect.ratio=1,
+        legend.position = "bottom",
+        legend.box = "horizontal")
+
+p_o2supply_Fbudgets
+
+
+## ---Oxygen demand---
+O2demand_pos <- dplyr::filter(surf_Fbudgets,  is.finite(O2_demand) & O2_demand >= 0) %>%
+  dplyr::mutate(O2demand_pos = O2_demand)
+
+O_breaks <- seq(0, max(O2demand_pos$O2demand_pos), length.out=5)
+O_labels <- sprintf("%.1f", O_breaks)
+
+p_o2supply_Fbudgets <- ggplot() + 
+  geom_raster(data = O2demand_pos, aes(f_ref, pO2, fill = O2demand_pos), interpolate = TRUE) + # POSITIVE region: white -> blue gradient (capped to per-column vmax)
+  scale_fill_gradient(
+    low = "white", high = "#8a5796", na.value = "black",
+    limits = c(0, max(O2demand_pos$O2demand_pos)), breaks = O_breaks, labels = O_labels,                     # <- extremes tied to max positive
+    oob = scales::squish,                                                        # <- clamp out-of-bounds values
+    #name   = expression("Oxygen surplus,"~S - D ~ "(normalized by " * S[max] * ")"),
+    name   = expression("Oxygen demand"),
+    guide = legend_bar_guide(O_breaks, O_labels)
+  ) +
+  geom_contour(
+    inherit.aes = FALSE,
+    data = O2demand_pos, aes(x = f_ref, y = pO2, z = O2demand_pos),
+    breaks = O_breaks, colour = "black", linewidth = 0.3, alpha = 1, linetype="dashed") +
+  labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~"(kPa)")#,
+       #title = paste("Oxygen Surplus")
+       ) +
+  scale_x_continuous(breaks = seq(min(f_seq), max(f_seq), by = 0.2), expand = c(0, 0)) +
+  scale_y_continuous(breaks = seq(min(pO2seq), max(pO2seq), by = 10), expand = c(0, 0)) +
+  base_theme + 
+  theme(aspect.ratio=1,
+        legend.position = "bottom",
+        legend.box = "horizontal")
+
+p_o2supply_Fbudgets
+
+
+## ---Oxygen surplus---
+surf_Fbudgets$O2_surplus <- surf_Fbudgets$O2_margin / surf_Fbudgets$O2_supply
+
+O2_na  <- dplyr::filter(surf_Fbudgets, !is.finite(O2_surplus) | is.na(O2_surplus))
+O2_neg <- dplyr::filter(surf_Fbudgets,  is.finite(O2_surplus) & O2_surplus < 0)
+O2_pos <- dplyr::filter(surf_Fbudgets,  is.finite(O2_surplus) & O2_surplus >= 0) %>%
+  dplyr::mutate(O2_pos = O2_surplus)
+
+O_breaks <- seq(0, 1, by = 0.2)
+O_labels <- sprintf("%.1f", O_breaks)
+
+p_o2_Fbudgets <- ggplot() + 
+  geom_raster(data = O2_na,  aes(f_ref, pO2), fill = "black", interpolate = TRUE) + # NA regions: black, here 
+  geom_raster(data = O2_neg, aes(f_ref, pO2), fill = "black", interpolate = TRUE) + # NEGATIVE region: black
+  geom_raster(data = O2_pos, aes(f_ref, pO2, fill = pmin(O2_pos, 1)), interpolate = TRUE) + # POSITIVE region: white -> blue gradient (capped to per-column vmax)
+  scale_fill_gradient(
+    high = "white", low = "#8a5796", na.value = "black",
+    limits = c(0, 1), breaks = O_breaks, labels = O_labels,                     # <- extremes tied to max positive
+    oob = scales::squish,                                                        # <- clamp out-of-bounds values
+    #name   = expression("Oxygen surplus,"~S - D ~ "(normalized by " * S[max] * ")"),
+    name   = expression("Oxygen surplus"),
+    guide = legend_bar_guide(O_breaks, O_labels)
+  ) +
+  geom_contour(
+    inherit.aes = FALSE,
+    data = O2_pos, aes(x = f_ref, y = pO2, z = O2_pos),
+    breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0), colour = "black", linewidth = 0.3, alpha = 1, linetype="dashed") +
+  labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~"(kPa)")#,
+       #title = paste("Oxygen Surplus")
+       ) +
+  scale_x_continuous(breaks = seq(min(f_seq), max(f_seq), by = 0.2), expand = c(0, 0)) +
+  scale_y_continuous(breaks = seq(min(pO2seq), max(pO2seq), by = 10), expand = c(0, 0)) +
+  base_theme + 
+  theme(aspect.ratio=1,
+        legend.position = "bottom",
+        legend.box = "horizontal")
+
+p_o2_Fbudgets
+
+
+## ---Oxygen ratio---
+surf_Fbudgets$O2_ratio <- surf_Fbudgets$O2_demand / surf_Fbudgets$O2_supply
+
+O2_na  <- dplyr::filter(surf_Fbudgets, !is.finite(O2_ratio) | is.na(O2_ratio))
+O2_neg <- dplyr::filter(surf_Fbudgets,  is.finite(O2_ratio) & O2_ratio > 1)
+O2_pos <- dplyr::filter(surf_Fbudgets,  is.finite(O2_ratio) & O2_ratio >= 0 & O2_ratio <=1) %>%
+  dplyr::mutate(O2_pos = O2_ratio)
+
+O_breaks <- seq(0, 1, by = 0.2) ##
+O_labels <- sprintf("%.1f", O_breaks)
+
+p_o2ratio_Fbudgets <- ggplot() + 
+  geom_raster(data = O2_na,  aes(f_ref, pO2), fill = "black", interpolate = TRUE) + # NA regions: black, here 
+  geom_raster(data = O2_neg, aes(f_ref, pO2), fill = "black", interpolate = TRUE) + # NEGATIVE region: black
+  geom_raster(data = O2_pos, aes(f_ref, pO2, fill = pmin(O2_pos, 1)), interpolate = TRUE) + # POSITIVE region: white -> blue gradient (capped to per-column vmax)
+  scale_fill_gradient(
+    low = "white", high = "#8a5796", na.value = "black",
+    limits = c(0, 1), breaks = O_breaks, labels = O_labels,                     # <- extremes tied to max positive
+    oob = scales::squish,                                                        # <- clamp out-of-bounds values
+    #name   = expression("Oxygen surplus,"~S - D ~ "(normalized by " * S[max] * ")"),
+    name   = expression("Oxygen\ndemand quotient"),
+    guide = legend_bar_guide(O_breaks, O_labels)
+  ) +
+  geom_contour(
+    inherit.aes = FALSE,
+    data = O2_pos, aes(x = f_ref, y = pO2, z = O2_pos),
+    breaks = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0), colour = "black", linewidth = 0.3, alpha = 1, linetype="dashed") +
+  labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~"(kPa)")#,
+       #title = paste("Oxygen Surplus")
+       ) +
+  scale_x_continuous(breaks = seq(min(f_seq), max(f_seq), by = 0.2), expand = c(0, 0)) +
+  scale_y_continuous(breaks = seq(min(pO2seq), max(pO2seq), by = 10), expand = c(0, 0)) +
+  base_theme + 
+  theme(aspect.ratio=1,
+        legend.position = "bottom",
+        legend.box = "horizontal")
+
+p_o2ratio_Fbudgets
+# Example A: 6×4 inches, 300 dpi PNG
+# ggsave("F_o2_budgets.png", plot = p_o2ratio_Fbudgets,
+#        width = 7, height = 5, units = "in", dpi = 500)
+
+
+## ---Cruising speed---
+Uopt_na  <- dplyr::filter(surf_Fbudgets, !is.finite(U_opt) | is.na(U_opt))
+Uopt_pos <- dplyr::filter(surf_Fbudgets,  is.finite(U_opt) & U_opt >= 0) %>%
+  dplyr::mutate(Uopt_pos = U_opt)
+
+U_breaks <- seq(0, max(Uopt_pos$Uopt_pos), length.out = 6) #c(0, 0.2, 0.4, 0.6, 0.8, 1.0)   # adjust to your U scaling
+U_labels <- sprintf("%.1f", U_breaks)
+
+p_U_Fbudgets <- ggplot() + 
+  geom_raster(data = Uopt_na,  aes(f_ref, pO2), fill = "#440154FF", interpolate = TRUE) + # NA regions: black, here 
+  geom_raster(data = Uopt_pos, aes(f_ref, pO2, fill = pmin(Uopt_pos, max(Uopt_pos))), interpolate = TRUE) + # POSITIVE region: white -> blue gradient (capped to per-column vmax)
+  scale_fill_viridis_c(
+    na.value = "#440154FF",
+    #limits = c(0, 1),                                                           # <- extremes tied to max positive
+    oob = scales::squish,                                                        # <- clamp out-of-bounds values
+    #name   = expression("Cruising speed,"~U[opt]~"(m/s)"),
+    name   = expression("Cruising speed"),
+    guide = legend_bar_guide(U_breaks, U_labels)
+  ) +
+  geom_contour(
+    inherit.aes = FALSE,
+    data = Uopt_pos, aes(x = f_ref, y = pO2, z = Uopt_pos),
+    breaks = U_breaks, colour = "white", linewidth = 0.3, alpha = 0.5, linetype="dashed") +
+  labs(x = "Prey index", y = expression("Oxygen,"~p[O[2]]~"(kPa)")#,
+       #title = paste("Cruising Speed")
+       ) +
+  scale_x_continuous(breaks = seq(min(f_seq), max(f_seq), by = 0.2), expand = c(0, 0)) +
+  scale_y_continuous(breaks = seq(min(pO2seq), max(pO2seq), by = 10), expand = c(0, 0)) +
+  base_theme + 
+  theme(aspect.ratio=1,
+        legend.position = "bottom",
+        legend.box = "horizontal")
+
+p_U_Fbudgets
+# Example A: 6×4 inches, 300 dpi PNG
+# ggsave("F_Ubudgets.png", plot = p_U_Fbudgets,
+#        width = 7, height = 5, units = "in", dpi = 500)
+
+
+## Limitation regimes
+surf_Fbudgets <- add_regime_labels2( # Append regime to the surface
+  surf_Fbudgets,
+  use_derivs = TRUE,
+  dE_thr = 0.01
+)
+
+# ---------------------------
+# 2) Plot like your U plot: tiles + borders, bottom legend
+
+# Regime palette + levels
+reg_levels <- c(
+  "Oxygen exclusion",
+  "Energetic exclusion",
+  "Oxygen limited (strict)",
+  "Oxygen limited (prey sensitive)",
+  "Prey limited (O2-tightening)",
+  "Prey limited (O2-relaxing)"
+)
+
+regime_cols <- c(
+  "Oxygen exclusion"           = "black",
+  "Energetic exclusion"        = "gray60",
+  "Oxygen limited (strict)"             = "#8a5796", #"#674776",
+  "Oxygen limited (prey sensitive)"     = "#BEA0C4",
+  "Prey limited (O2-tightening)"               = "#ADD946", #"#FDE725FF", #"#C0DD3F",
+  "Prey limited (O2-relaxing)"             = "#4DB674"
+)
+
+# Build a regular grid matrix of class IDs for clean borders
+xs <- sort(unique(surf_Fbudgets$f_ref))
+ys <- sort(unique(surf_Fbudgets$pO2))
+Z_tbl <- tidyr::pivot_wider(surf_Fbudgets[, c("f_ref","pO2","class_id")],
+                            names_from = pO2, values_from = class_id) |>
+         dplyr::arrange(f_ref)
+Z <- as.matrix(Z_tbl[, -1, drop = FALSE])
+
+# Border levels at midpoints between class IDs
+brks <- seq(1.5, length(reg_levels) - 0.5, by = 1)
+
+# Data frame for contour (regular grid)
+grid_for_contour <- expand.grid(f_ref = xs, pO2 = ys)
+grid_for_contour$class_id <- as.vector(Z)
+
+p_regime_Fbudgets <-
+  ggplot() +
+  geom_raster(data = surf_Fbudgets, aes(f_ref, pO2, fill = regime), interpolate = FALSE) +
+  geom_contour(
+    data = grid_for_contour,
+    aes(x = f_ref, y = pO2, z = class_id),
+    breaks = brks, colour = "gray60", linewidth = 0.3
+  ) +
+  scale_fill_manual(
+    values = regime_cols,
+    drop   = FALSE,
+    name   = "Regime",
+    guide  = guide_legend(
+      nrow = 6, byrow = TRUE,              # <-- two rows
+      keywidth  = unit(3, "mm"),
+      keyheight = unit(3,  "mm"),
+      override.aes = list(                  # <-- add grey border to swatches
+        colour   = "grey50",
+        size      = 1,                     # border thickness (stroke)
+        linewidth = 1
+      )
+    )
+  ) +
+  labs(
+    x = "Prey index",
+    y = expression("Oxygen,"~p[O[2]]~"(kPa)")#,
+    #title = "Limitation regimes"
+  ) +
+  scale_x_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0, 30), breaks = seq(0, 30, 10), expand = c(0, 0)) +
+  base_theme +
+  theme(
+    aspect.ratio      = 1,
+    legend.position   = "bottom",
+    legend.direction  = "horizontal",
+    legend.box        = "horizontal",
+    legend.title      = element_blank(), #element_text(),
+    legend.text       = element_text(),
+    legend.key        = element_rect(colour = "gray50"),   # keep keys clean; border comes from override.aes
+    legend.box.spacing= unit(4, "pt")
+  )
+
+p_regime_Fbudgets
+# Example A: 6×4 inches, 300 dpi PNG
+# ggsave("F_regime_budgets.png", plot = p_regime_Fbudgets,
+#        width = 7, height = 5, units = "in", dpi = 500)
+```
+
+
+## Together
+
+```{r fig.height=3.25, fig.width=6.5, warning=FALSE}
+# Helper: remove y-axis text/title/ticks from a plot
+strip_y <- function(p) {
+  p + theme(
+    axis.title.y = element_blank(),
+    axis.text.y  = element_blank()#,
+    #axis.ticks.y = element_blank()
+  )
+}
+
+# Ensure identical margins so panels line up perfectly
+uniform_margins <- margin(8, 8, 8, 8)  # tweak if needed
+p1_Eavail_Fbudgets <- p_Eavail_Fbudgets + theme(plot.margin = uniform_margins,
+                                               legend.key.height = unit(dev.size()[1] / 50, "inches"))
+p2_o2ratio_Fbudgets     <- p_o2ratio_Fbudgets     + theme(plot.margin = uniform_margins,
+                                               legend.key.height = unit(dev.size()[1] / 50, "inches"))
+p3_U_Fbudgets      <- p_U_Fbudgets      + theme(plot.margin = uniform_margins,
+                                               legend.key.height = unit(dev.size()[1] / 50, "inches"))
+p4_regime_Fbudgets <- p_regime_Fbudgets + theme(plot.margin = uniform_margins,
+                                                legend.text  = element_text(size=6, color="black"))
+
+# Assemble: left plot keeps y-axis; others are stripped
+p_Fbudget <-
+  (p1_Eavail_Fbudgets | strip_y(p2_o2ratio_Fbudgets) | strip_y(p3_U_Fbudgets) | strip_y(p4_regime_Fbudgets)) +
+  plot_layout(widths = c(1, 1, 1, 1), guides = "keep") &  # use "collect" if you want a single legend
+  theme(legend.position = "bottom")
+
+p_Fbudget
+```
+
+
+```{r eval=T, include=FALSE}
+# Example A: 6×4 inches, 300 dpi PNG
+ggsave("F_budgets.png", plot = p_Fbudget,
+       width = 6.5, height = 3.25, units = "in", dpi = 500)
+```
+
+
+
+```{r}
+B_seq <- 10^seq(-2, 6, length.out = 400)  # 1e-2 to 1e3, evenly spaced in log10
+
+surf_Fbudgets <- compute_state_surface(
+  tr,
+  masses   = 1e4,
+  Tseq     = T,
+  pO2seq   = pO2seq,
+  prey_units = "biomass",
+  preys      = B_seq,
+  pair_mode  = "cross",
+  D = 3,
+  u_prey = 0#10^(-0.55) * (1 * mass)^(1/6)
+)
+
+surf_Fbudgets <- add_regime_labels_ingestion(surf_Fbudgets)
+```
+
+```{r}
+# --- Prep -------------------------------------------------------------
+
+surf_plot <- surf_Fbudgets %>%
+  dplyr::mutate(
+    B = B_used,                             # absolute biomass
+    regime = factor(as.character(regime), levels = levels(regime)),
+    class_id = as.integer(regime)
+  )
+
+# X-axis breaks/labels for absolute biomass with log10 spacing
+B_limits <- range(B_seq, finite = TRUE)
+
+B_breaks <- 10^seq(floor(log10(B_limits[1])), ceiling(log10(B_limits[2])), by = 1)
+
+# ---------------------------------------------------------------------
+# 1) Available energy plot (absolute B on x, log10 axis)
+#    - O2_margin < 0 -> black
+#    - E_net_norm < 0 -> gray60
+#    - NA transparent
+# ---------------------------------------------------------------------
+
+E_O2excl <- dplyr::filter(surf_plot, is.finite(O2_margin) & O2_margin < 0)
+
+E_neg <- dplyr::filter(
+  surf_plot,
+  is.finite(E_net_norm) & E_net_norm < 0 &
+    !(is.finite(O2_margin) & O2_margin < 0)
+)
+
+E_pos <- dplyr::filter(
+  surf_plot,
+  is.finite(E_net_norm) & E_net_norm >= 0 &
+    !(is.finite(O2_margin) & O2_margin < 0)
+) %>%
+  dplyr::mutate(E_pos = pmin(E_net_norm, 1))
+
+E_breaks <- seq(0, 1, by = 0.2)
+E_labels <- sprintf("%.1f", E_breaks)
+
+p_Eavail_Fbudgets <- ggplot() +
+  # oxygen exclusion: black
+  geom_raster(
+    data = E_O2excl,
+    aes(x = B, y = pO2),
+    fill = "black",
+    interpolate = TRUE
+  ) +
+  # negative energy: gray
+  geom_raster(
+    data = E_neg,
+    aes(x = B, y = pO2),
+    fill = "gray60",
+    interpolate = TRUE
+  ) +
+  # positive energy: gradient
+  geom_raster(
+    data = E_pos,
+    aes(x = B, y = pO2, fill = E_pos),
+    interpolate = TRUE
+  ) +
+  # contours of energy levels (optional)
+  geom_contour(
+    inherit.aes = FALSE,
+    data = E_pos,
+    aes(x = B, y = pO2, z = E_pos),
+    breaks = seq(0, 1, by = 0.1),
+    colour = "black", linewidth = 0.3, linetype = "dashed"
+  ) +
+  # oxygen-balance boundary: O2_margin == 0
+  geom_contour(
+    inherit.aes = FALSE,
+    data = dplyr::filter(surf_plot, is.finite(O2_margin)),
+    aes(x = B, y = pO2, z = O2_margin),
+    breaks = 0,
+    colour = "black", linewidth = 0.4
+  ) +
+  scale_fill_gradient(
+    low = "white", high = "#67A5CA",
+    na.value = NA,                     # NA transparent (not gray)
+    limits = c(0, 1),
+    breaks = E_breaks, labels = E_labels,
+    oob = scales::squish,
+    name  = expression("Available energy"),
+    guide = legend_bar_guide(E_breaks, E_labels)
+  ) +
+  labs(
+    x = "Prey biomass B",
+    y = expression("Oxygen,"~p[O[2]]~"(kPa)")
+  ) +
+  scale_x_log10(
+    limits = B_limits,
+    breaks = B_breaks,
+    labels = scales::math_format(10^.x),
+    expand = c(0, 0)
+  ) +
+  scale_y_continuous(
+    breaks = seq(min(pO2seq), max(pO2seq), by = 10),
+    expand = c(0, 0)
+  ) +
+  base_theme +
+  theme(aspect.ratio = 1,
+        legend.position = "bottom",
+        legend.box = "horizontal")
+
+p_Eavail_Fbudgets
+
+
+# ---------------------------------------------------------------------
+# 2) Regime plot (absolute B on x, log10 axis) + borders
+# ---------------------------------------------------------------------
+
+reg_levels <- levels(surf_plot$regime)
+
+# You can tweak these colors; these are sensible defaults
+regime_cols <- c(
+  "Oxygen exclusion"           = "black",
+  "Energetic exclusion"        = "gray60",
+  "Oxygen-limited feeding"     = "#8a5796",
+  "Encounter-limited feeding"  = "#4DB674",
+  "Saturated (Cmax-limited)"   = "#ADD946",
+  "Co-limited / boundary"      = "white"
+)
+
+# Ensure palette covers all levels in the factor
+regime_cols <- regime_cols[reg_levels]
+regime_cols[is.na(regime_cols)] <- "white"
+
+# Build a regular grid for borders
+xs <- sort(unique(surf_plot$B))
+ys <- sort(unique(surf_plot$pO2))
+
+Z_tbl <- tidyr::pivot_wider(
+  surf_plot[, c("B","pO2","class_id")],
+  names_from = pO2, values_from = class_id
+) |>
+  dplyr::arrange(B)
+
+Z <- as.matrix(Z_tbl[, -1, drop = FALSE])
+
+brks <- seq(1.5, length(reg_levels) - 0.5, by = 1)
+
+grid_for_contour <- expand.grid(B = xs, pO2 = ys)
+grid_for_contour$class_id <- as.vector(Z)
+
+p_regime_Fbudgets <-
+  ggplot() +
+  geom_raster(
+    data = surf_plot,
+    aes(x = B, y = pO2, fill = regime),
+    interpolate = FALSE
+  ) +
+  geom_contour(
+    data = grid_for_contour,
+    aes(x = B, y = pO2, z = class_id),
+    breaks = brks,
+    colour = "gray60", linewidth = 0.3
+  ) +
+  scale_fill_manual(
+    values = regime_cols,
+    drop   = FALSE,
+    name   = "Regime",
+    guide  = guide_legend(
+      nrow = length(reg_levels), byrow = TRUE,
+      keywidth  = unit(3, "mm"),
+      keyheight = unit(3, "mm"),
+      override.aes = list(colour = "grey50", linewidth = 0.6)
+    )
+  ) +
+  labs(
+    x = "Prey biomass B",
+    y = expression("Oxygen,"~p[O[2]]~"(kPa)")
+  ) +
+  scale_x_log10(
+    limits = B_limits,
+    breaks = B_breaks,
+    labels = scales::math_format(10^.x),
+    expand = c(0, 0)
+  ) +
+  scale_y_continuous(
+    limits = c(min(pO2seq), max(pO2seq)),
+    breaks = seq(min(pO2seq), max(pO2seq), 10),
+    expand = c(0, 0)
+  ) +
+  base_theme +
+  theme(
+    aspect.ratio      = 1,
+    legend.position   = "bottom",
+    legend.direction  = "horizontal",
+    legend.box        = "horizontal",
+    legend.title      = element_blank(),
+    legend.key        = element_rect(colour = "gray50"),
+    legend.box.spacing= unit(4, "pt")
+  )
+
+p_regime_Fbudgets
+```
+
+
+# Fig. 3
+
+## Running
+
+```{r}
+# Parameters
+masses   <- c(1e0, 1e4)                                                         # [g]
+Tseq      <- seq(0, 30, by=0.1)                                                 # [°C]
+f_seq  <- c(0.9, 0.6)                                                           # []
+pO2seq <- seq(0, 30, by=0.1)                                                    # [kPa]
+
+
+# Calculate surfaces
+surf_F_TpO2space <- compute_state_surface(
+  tr,                                                                           # consider re-adjusting if you add other functional groups
+  masses = masses,
+  Tseq = Tseq,
+  pO2seq = pO2seq,
+  preys = f_seq, 
+  prey_units = "prey_index", #"prey_index", "feeding_level"
+  pair_mode = "cross"
+)
+
+# Limitation regimes
+surf_F_TpO2space <- add_B_gradients(surf_F_TpO2space, tr, method = "perturb", use_norm  = TRUE, prey_axis = "B", d_rel = 0.05, progress = TRUE)
+```
+
+
+## Available energy
+
+```{r warning=FALSE}
+# Inputs expected:
+# - surf_F_TpO2space with cols: f_ref, mass, T, pO2, E_net_norm
+# - legend_bar_guide(), base_theme already defined
+
+# Breaks/labels for the colorbar
+E_breaks <- seq(0, 1, by = 0.2)
+E_labels <- sprintf("%.1f", E_breaks)
+
+E_min <- min(surf_F_TpO2space$E_net_norm, na.rm = TRUE)
+E_max <- max(surf_F_TpO2space$E_net_norm, na.rm = TRUE)
+
+# Find unique (f_ref, mass) combos
+combos <- surf_F_TpO2space |>
+  dplyr::distinct(f_ref, mass) |>
+  dplyr::arrange(f_ref, mass) |>
+  dplyr::mutate(name = paste0("f=", signif(f_ref, 3), " | m=", signif(mass, 3)))
+
+# Container for plots
+plots_E <- vector("list", nrow(combos))
+names(plots_E) <- combos$name
+
+# Build plots in a simple for-loop
+for (i in seq_len(nrow(combos))) {
+  f_i <- combos$f_ref[i]
+  m_i <- combos$mass[i]
+  nm  <- combos$name[i]
+
+  df_i <- dplyr::filter(surf_F_TpO2space, f_ref == f_i, mass == m_i)
+
+  # Split like your style
+  E_na  <- dplyr::filter(df_i, !is.finite(E_net_norm) | is.na(E_net_norm))
+  E_neg <- dplyr::filter(df_i,  is.finite(E_net_norm) & E_net_norm < 0)
+  E_pos <- dplyr::filter(df_i,  is.finite(E_net_norm) & E_net_norm >= 0) |>
+           dplyr::mutate(E_pos = E_net_norm)
+
+  # Axes ranges & ticks
+  Tx  <- range(df_i$T,  na.rm = TRUE)
+  O2x <- range(df_i$pO2, na.rm = TRUE)
+  x_br <- pretty(Tx, n = 6)
+  y_br <- seq(ceiling(O2x[1]/10)*10, floor(O2x[2]/10)*10, by = 10)
+  if (length(y_br) == 0) y_br <- pretty(O2x, n = 4)
+
+  p <- ggplot() +
+    geom_raster(data = E_na,  aes(T, pO2), fill = "black",  interpolate = FALSE) +
+    geom_raster(data = E_neg, aes(T, pO2), fill = "gray60", interpolate = FALSE) +
+    geom_raster(data = E_pos, aes(T, pO2, fill = pmin(E_pos, 1)), interpolate = FALSE) +
+    geom_contour(
+      inherit.aes = FALSE,
+      data = E_pos, aes(x = T, y = pO2, z = E_pos),
+      breaks = seq(min(E_pos$E_pos), max(E_pos$E_pos), length.out=5), colour = "black", linewidth = 0.3, alpha = 1, linetype = "dashed"
+    ) +
+    # { if (dplyr::n_distinct(na.omit(df_i$class_id)) >= 2)
+    #     geom_contour(
+    #       inherit.aes = FALSE,
+    #       data = df_i,
+    #       aes(x = T, y = pO2, z = class_id),
+    #       breaks = 3.5,             # midpoint between 3 and 4
+    #       #linetype = "dashed",
+    #       colour = "black",
+    #       linewidth = 0.5
+    #     )
+    #   else NULL } +
+    scale_fill_gradient(
+      low = "white", high = "#67A5CA", na.value = "black",
+      limits = c(0, E_max), breaks = E_breaks, labels = E_labels,
+      oob = scales::squish,
+      name = expression("Available energy"),
+      guide = legend_bar_guide(E_breaks, E_labels)
+    ) +
+    labs(
+      #title = nm,
+      x = "Temperature (°C)",
+      y = expression("Oxygen," ~ p[O[2]] ~ "(kPa)")
+    ) +
+    scale_x_continuous(breaks = seq(min(Tseq), max(Tseq), by = 5), expand = c(0, 0)) +
+    scale_y_continuous(breaks = seq(min(pO2seq), max(pO2seq), by = 5), expand = c(0, 0)) +
+    #scale_x_continuous(limits = Tx,  breaks = x_br, expand = c(0, 0)) +
+    #scale_y_continuous(limits = O2x, breaks = y_br, expand = c(0, 0)) +
+    base_theme +
+    theme(
+      aspect.ratio    = 1,
+      legend.position = "bottom",
+      legend.box      = "horizontal"
+    )
+
+  plots_E[[nm]] <- p
+}
+```
+
+```{r fig.height=4.5, fig.width=3.5, warning=FALSE}
+# helpers
+strip_y <- function(p) p + theme(axis.title.y = element_blank(),
+                                 axis.text.y  = element_blank()#,
+                                 #axis.ticks.y = element_blank()
+                                 )
+strip_x <- function(p) p + theme(axis.title.x = element_blank(),
+                                 axis.text.x  = element_blank()#,
+                                 #axis.ticks.x = element_blank()
+                                 )
+
+# uniform margins so panels line up perfectly
+uniform_margins <- margin(5.5, 5.5, 5.5, 5.5)
+
+# pick plots in requested order
+p1 <- plots_E[[3]] + theme(plot.margin = uniform_margins)   # top-left
+p2 <- plots_E[[4]] + theme(plot.margin = uniform_margins)   # top-right
+p3 <- plots_E[[1]] + theme(plot.margin = uniform_margins)   # bottom-left
+p4 <- plots_E[[2]] + theme(plot.margin = uniform_margins)   # bottom-right
+
+# apply axis stripping:
+# top row: no x labels; left keeps y, right strips y
+p1 <- strip_x(p1)                 # keep y
+p2 <- strip_x(strip_y(p2))        # strip y
+
+# bottom row: keep x; left keeps y, right strips y
+p3 <- p3                          # keep y & x
+p4 <- strip_y(p4)                 # strip y, keep x
+
+# assemble 2x2 (p1 p2 / p3 p4)
+grid_E_2x2 <-
+  ((p1 | p2) /
+   (p3 | p4)) +
+  plot_layout(widths = c(1, 1), heights = c(1, 1), guides = "collect") &
+  theme(
+    legend.position      = "bottom",
+    legend.direction     = "horizontal",
+    legend.justification = "center",
+    legend.key.height = unit(dev.size()[1] / 50, "inches")
+  )
+
+grid_E_2x2
+```
+
+```{r eval=FALSE, include=FALSE}
+# Example A: 6×4 inches, 300 dpi PNG
+ggsave("F_plotsE_preyindex.png", plot = grid_E_2x2,
+       width = 3.25, height = 3.75, units = "in", dpi = 300)
+```
+
+
+## Cruising speed
+
+```{r warning=FALSE}
+# Inputs expected:
+# - surf_F_TpO2space with cols: f_ref, mass, T, pO2, U_opt
+# - legend_bar_guide(), base_theme already defined
+
+# Breaks/labels for the colorbar
+E_breaks <- seq(0, 1, by = 0.2)
+E_labels <- sprintf("%.1f", E_breaks)
+
+# Find unique (f_ref, mass) combos
+combos <- surf_F_TpO2space |>
+  dplyr::distinct(f_ref, mass) |>
+  dplyr::arrange(f_ref, mass) |>
+  dplyr::mutate(name = paste0("f=", signif(f_ref, 3), " | m=", signif(mass, 3)))
+
+# Container for plots
+plots_U <- vector("list", nrow(combos))
+names(plots_U) <- combos$name
+
+# Build plots in a simple for-loop
+for (i in seq_len(nrow(combos))) {
+  f_i <- combos$f_ref[i]
+  m_i <- combos$mass[i]
+  nm  <- combos$name[i]
+
+  df_i <- dplyr::filter(surf_F_TpO2space, f_ref == f_i, mass == m_i)
+
+  # color limits
+  df_i_mass <- dplyr::filter(surf_F_TpO2space, mass == m_i)
+  E_min <- min(df_i_mass$U_opt, na.rm = TRUE)
+  E_max <- max(df_i_mass$U_opt, na.rm = TRUE)
+  
+  # Split like your style
+  E_na  <- dplyr::filter(df_i, !is.finite(U_opt) | is.na(U_opt))
+  E_neg <- dplyr::filter(df_i,  is.finite(E_net_norm) & E_net_norm < 0)
+  E_pos <- dplyr::filter(df_i,  is.finite(U_opt) & U_opt >= 0) |>
+           dplyr::mutate(E_pos = U_opt)
+
+  # Axes ranges & ticks
+  Tx  <- range(df_i$T,  na.rm = TRUE)
+  O2x <- range(df_i$pO2, na.rm = TRUE)
+  x_br <- pretty(Tx, n = 6)
+  y_br <- seq(ceiling(O2x[1]/10)*10, floor(O2x[2]/10)*10, by = 10)
+  if (length(y_br) == 0) y_br <- pretty(O2x, n = 4)
+
+  p <- ggplot() +
+    geom_raster(data = E_na,  aes(T, pO2), fill = "black",  interpolate = FALSE) +
+    geom_raster(data = E_neg, aes(T, pO2), fill = "gray60", interpolate = FALSE) +
+    geom_raster(data = E_pos, aes(T, pO2, fill = pmin(E_pos, E_max)), interpolate = FALSE) +
+    geom_contour(
+      inherit.aes = FALSE,
+      data = E_pos, aes(x = T, y = pO2, z = E_pos),
+      breaks = seq(min(E_pos$E_pos), max(E_pos$E_pos), length.out=5), colour = "white", linewidth = 0.3, alpha = 1, linetype="dashed"
+    ) +
+    # { if (dplyr::n_distinct(na.omit(df_i$class_id)) >= 2)
+    #     geom_contour(
+    #       inherit.aes = FALSE,
+    #       data = df_i,
+    #       aes(x = T, y = pO2, z = class_id),
+    #       breaks = 3.5,             # midpoint between 3 and 4
+    #       #linetype = "dashed",
+    #       colour = "white",
+    #       linewidth = 0.5
+    #     )
+    #   else NULL } +
+    scale_fill_viridis_c(
+      na.value = "#440154FF",
+      limits = c(0, E_max),                                                           # <- extremes tied to max positive
+      oob = scales::squish,                                                        # <- clamp out-of-bounds values
+      #name   = expression("Cruising speed,"~U[opt]~"(m/s)"),
+      name   = expression("Cruising speed"),
+      guide = legend_bar_guide(U_breaks, U_labels)
+    ) +
+    labs(
+      #title = nm,
+      x = "Temperature (°C)",
+      y = expression("Oxygen," ~ p[O[2]] ~ "(kPa)")
+    ) +
+    scale_x_continuous(breaks = seq(min(Tseq), max(Tseq), by = 5), expand = c(0, 0)) +
+    scale_y_continuous(breaks = seq(min(pO2seq), max(pO2seq), by = 5), expand = c(0, 0)) +
+    #scale_x_continuous(limits = Tx,  breaks = x_br, expand = c(0, 0)) +
+    #scale_y_continuous(limits = O2x, breaks = y_br, expand = c(0, 0)) +
+    base_theme +
+    theme(
+      aspect.ratio    = 1,
+      legend.position = "bottom",
+      legend.box      = "horizontal"
+    )
+
+  plots_U[[nm]] <- p
+}
+```
+
+```{r fig.height=4.5, fig.width=3.5, warning=FALSE}
+# helpers
+strip_y <- function(p) p + theme(axis.title.y = element_blank(),
+                                 axis.text.y  = element_blank()#,
+                                 #axis.ticks.y = element_blank()
+                                 )
+strip_x <- function(p) p + theme(axis.title.x = element_blank(),
+                                 axis.text.x  = element_blank()#,
+                                 #axis.ticks.x = element_blank()
+                                 )
+
+# uniform margins so panels line up perfectly
+uniform_margins <- margin(5.5, 5.5, 5.5, 5.5)
+
+# pick plots in requested order
+p1 <- plots_U[[3]] + theme(plot.margin = uniform_margins)   # top-left
+p2 <- plots_U[[4]] + theme(plot.margin = uniform_margins)   # top-right
+p3 <- plots_U[[1]] + theme(plot.margin = uniform_margins)   # bottom-left
+p4 <- plots_U[[2]] + theme(plot.margin = uniform_margins)   # bottom-right
+
+# apply axis stripping:
+# top row: no x labels; left keeps y, right strips y
+p1 <- strip_x(p1)                 # keep y
+p2 <- strip_x(strip_y(p2))        # strip y
+
+# bottom row: keep x; left keeps y, right strips y
+p3 <- p3                          # keep y & x
+p4 <- strip_y(p4)                 # strip y, keep x
+
+# assemble 2x2 (p1 p2 / p3 p4)
+grid_U_2x2 <-
+  ((p1 | p2) /
+   (p3 | p4)) +
+  plot_layout(widths = c(1, 1), heights = c(1, 1), guides = "collect") &
+  theme(
+    legend.position      = "bottom",
+    legend.direction     = "horizontal",
+    legend.justification = "center",
+    legend.key.height = unit(dev.size()[1] / 50, "inches")
+  )
+
+print(U_ref_from_mass(masses[2]))
+
+grid_U_2x2
+```
+
+```{r eval=TRUE, include=T}
+# Example A: 6×4 inches, 300 dpi PNG
+ggsave("F_plotsU_preyindex.png", plot = grid_U_2x2,
+       width = 3.5, height = 4.5, units = "in", dpi = 500)
+```
+
+
+## Limitation regimes
+
+```{r}
+# -----------------------------
+# Regime palette + levels
+reg_levels <- c(
+  "Oxygen exclusion",
+  "Energetic exclusion",
+  "Oxygen limited (strict)",
+  "Oxygen limited (prey sensitive)",
+  "Prey limited (O2-tightening)",
+  "Prey limited (O2-relaxing)"
+)
+
+regime_cols <- c(
+  "Oxygen exclusion"           = "black",
+  "Energetic exclusion"        = "gray60",
+  "Oxygen limited (strict)"             = "#8a5796", #"#674776",
+  "Oxygen limited (prey sensitive)"     = "#BEA0C4",
+  "Prey limited (O2-tightening)"               = "#ADD946", #"#FDE725FF", #"#C0DD3F",
+  "Prey limited (O2-relaxing)"             = "#4DB674"
+)
+
+surf_F_TpO2space <- add_regime_labels2( # Append regime to the surface
+  surf_F_TpO2space,
+  use_derivs = TRUE,
+  dE_thr = 0.01,
+  dO_thr = 0.01
+)
+
+# -----------------------------
+# Build per-(f_ref, mass) regime plots over T × pO2
+combos <- surf_F_TpO2space %>%
+  distinct(f_ref, mass) %>%
+  arrange(f_ref, mass) %>%
+  mutate(name = paste0("f=", signif(f_ref, 3), " | m=", signif(mass, 3)))
+
+plots_R <- vector("list", nrow(combos))
+names(plots_R) <- combos$name
+
+for (i in seq_len(nrow(combos))) {
+  f_i <- combos$f_ref[i]
+  m_i <- combos$mass[i]
+  nm  <- combos$name[i]
+
+  sub <- surf_F_TpO2space %>% filter(f_ref == f_i, mass == m_i)
+
+  # Build a regular grid for crisp borders between categorical tiles
+  xs <- sort(unique(sub$T))
+  ys <- sort(unique(sub$pO2))
+  Z_tbl <- tidyr::pivot_wider(sub[, c("T","pO2","class_id")],
+                              names_from = pO2, values_from = class_id) %>%
+           arrange(T)
+  Z <- as.matrix(Z_tbl[, -1, drop = FALSE])
+
+  # contour at midpoints between integer class IDs
+  brks <- seq(1.5, length(reg_levels) - 0.5, by = 1)
+  grid_for_contour <- expand.grid(T = xs, pO2 = ys)
+  grid_for_contour$class_id <- as.vector(Z)
+
+  # nice axis ticks
+  Tx  <- range(sub$T,  na.rm = TRUE)
+  O2x <- range(sub$pO2, na.rm = TRUE)
+  x_br <- pretty(Tx, n = 6)
+  y_br <- seq(ceiling(O2x[1]/10)*10, floor(O2x[2]/10)*10, by = 10)
+  if (length(y_br) == 0) y_br <- pretty(O2x, n = 4)
+
+  p <- ggplot() +
+    geom_raster(data = sub, aes(T, pO2, fill = regime), interpolate = FALSE) +
+    geom_contour(
+      data = grid_for_contour,
+      aes(x = T, y = pO2, z = class_id),
+      breaks = brks, colour = "gray60", linewidth = 0.3
+    ) +
+    scale_fill_manual(
+      values = regime_cols, drop = FALSE, name = "Regime",
+      guide = guide_legend(
+        nrow = 3, byrow = TRUE,                # stack keys in two rows
+        keywidth  = unit(3, "mm"),
+        keyheight = unit(3, "mm"),
+        override.aes = list(colour = "grey30", linewidth = 0.6)
+      )
+    ) +
+    labs(
+      #title = nm,
+      x = "Temperature (°C)",
+      y = expression("Oxygen,"~p[O[2]]~"(kPa)")
+    ) +
+    scale_x_continuous(breaks = seq(min(Tseq), max(Tseq), by = 5), expand = c(0, 0)) +
+    scale_y_continuous(breaks = seq(min(pO2seq), max(pO2seq), by = 5), expand = c(0, 0)) +
+    #scale_x_continuous(limits = Tx, breaks = x_br, expand = c(0, 0)) +
+    #scale_y_continuous(limits = O2x, breaks = y_br, expand = c(0, 0)) +
+    base_theme +
+    theme(
+      aspect.ratio     = 1,
+      legend.position  = "bottom",
+      legend.direction = "horizontal",
+      legend.box       = "horizontal",
+      legend.title     = element_blank(),
+      legend.key       = element_rect(colour = "grey50")
+    )
+
+  plots_R[[nm]] <- p
+}
+```
+
+
+```{r fig.height=4.5, fig.width=3.5, warning=FALSE}
+# -----------------------------
+# Arrange a 2×2 in order: 3, 4, 1, 2
+strip_y <- function(p) p + theme(axis.title.y = element_blank(),
+                                 axis.text.y  = element_blank()#,
+                                 #axis.ticks.y = element_blank()
+                                 )
+strip_x <- function(p) p + theme(axis.title.x = element_blank(),
+                                 axis.text.x  = element_blank()#,
+                                 #axis.ticks.x = element_blank()
+                                 )
+
+uniform_margins <- margin(5.5, 5.5, 5.5, 5.5)
+
+p1 <- plots_R[[3]] + theme(plot.margin = uniform_margins)   # top-left  (keep y, strip x)
+p2 <- plots_R[[4]] + theme(plot.margin = uniform_margins)   # top-right (strip y & x)
+p3 <- plots_R[[1]] + theme(plot.margin = uniform_margins)   # bot-left  (keep y & x)
+p4 <- plots_R[[2]] + theme(plot.margin = uniform_margins)   # bot-right (strip y, keep x)
+
+p1 <- strip_x(p1)
+p2 <- strip_y(strip_x(p2))
+# p3 keeps both axes
+p4 <- strip_y(p4)
+
+grid_2x2_regimes <-
+  ((p1 | p2) /
+   (p3 | p4)) +
+  plot_layout(widths = c(1, 1), heights = c(1, 1), guides = "collect") &
+  theme(
+    legend.position      = "bottom",
+    legend.direction     = "horizontal",
+    legend.justification = "center",
+    legend.text  = element_text(size=6, color="black")
+  )
+
+grid_2x2_regimes
+```
+
+```{r eval=FALSE, include=T}
+# Example A: 6×4 inches, 300 dpi PNG
+ggsave("F_plotsRegime_preyindex.png", plot = grid_2x2_regimes,
+       width = 3.5, height = 4.5, units = "in", dpi = 300)
+```
+
+
+## Together
+
+```{r fig.width=6.5}
+# your existing regimes grid
+grid_2x2_regimes <-
+  ((p1 | p2) /
+   (p3 | p4)) +
+  plot_layout(widths = c(1, 1), heights = c(1, 1), guides = "collect") &
+  theme(
+    legend.position      = "bottom",
+    legend.direction     = "horizontal",
+    legend.justification = "center",
+    legend.text          = element_text(size = 6, color = "black")
+  )
+
+# version with all y-axes stripped (titles and text) on the regimes grid
+grid_2x2_regimes_stripped <-
+  grid_2x2_regimes &
+  theme(
+    axis.title.y = element_blank(),
+    axis.text.y  = element_blank()
+  )
+
+combined_4x2 <- 
+  (wrap_elements(grid_E_2x2) | wrap_elements(grid_2x2_regimes_stripped)) +
+  plot_layout(widths = c(1, 1), guides = "keep")
+
+
+combined_4x2 &
+  theme(
+    legend.text = element_text(size = 6, color = "black")
+  )
+```
+
+```{r eval=FALSE, include=T}
+# Example A: 6×4 inches, 300 dpi PNG
+ggsave("F_plotsAll_preyindex.png", plot = combined_4x2,
+       width = 6.5, height = 4, units = "in", dpi = 500)
+```
+
+
+
+
+
+## Data
+
+```{r}
+LOCAL_PATH <- "/data_out"
+PATH <- paste0(gsub("scratch", "scratch", here()), LOCAL_PATH)                  ##PATH <- paste0(gsub("scratch", "project", here()), LOCAL_PATH)   ## use if environment can see mirrored Project folder
+occurrence_df <- read.csv(paste0(PATH, "/occurrence_TO2.csv"))
+```
+
+```{r fig.height=4.5, fig.width=3.5, warning=FALSE}
+occurrence_filt <- occurrence_df %>%
+  filter(mass_bin %in% c("10^0–10^1 g", "10^4–10^5 g"))
+
+# -----------------------------
+# Build per-(f_ref, mass) regime plots over T × pO2
+combos <- occurrence_filt %>%
+  distinct(mass_bin) %>%
+  mutate(name = mass_bin)
+
+E_breaks <- c(1e0, 1e1, 1e2, 1e3, 1e4) #seq(0, 1, by = 0.2)
+E_labels <- c(expression(10^0), expression(10^1), expression(10^2), expression(10^3), expression(10^4)) #sprintf("%.1f", E_breaks)
+
+plots_occ <- vector("list", nrow(combos))
+names(plots_occ) <- combos$name
+  
+for (i in seq_len(nrow(combos))) {
+  nm  <- combos$name[i]
+  
+  sub <- occurrence_filt %>% filter(mass_bin == nm)
+  
+  p <- ggplot() +
+    # Unavailable habitat: flat color
+  geom_tile(
+    data = sub %>%
+      filter(habitat_class_threshold == "Unavailable"),
+    aes(x = T_mid, y = O_mid),
+    fill  = "gray",  # flat pale color
+    color = NA
+  ) +
+  # Unused habitat: flat color
+  geom_tile(
+    data = sub %>%
+      filter(habitat_class_threshold == "Unused"),
+    aes(x = T_mid, y = O_mid),
+    fill  = "white",  # flat pale color
+    color = NA
+  ) +
+  # Used habitat: log-scaled color by fish_n
+  geom_tile(
+    data = sub %>%
+      filter(habitat_class_threshold == "Used", fish_n > 0),
+    aes(x = T_mid, y = O_mid, fill = fish_n),
+    color = NA
+  ) +
+  #facet_wrap(~ mass_bin) +
+  coord_equal(xlim = c(0, 30), ylim = c(0, 30)) +
+  scale_x_continuous(breaks = seq(min(Tseq), max(Tseq), by = 5), expand = c(0, 0)) +
+  scale_y_continuous(breaks = seq(min(pO2seq), max(pO2seq), by = 5), expand = c(0, 0)) +
+  # scale_fill_viridis_c(
+  #   name = "Occurrences",
+  #   trans = "log10"  # log-transform the color scale
+  # ) +
+  scale_fill_gradient(
+    name = "Occurrences",
+    trans = "log10",
+    low  = "#3DB4AD",
+    high = "#312342",
+    guide = legend_bar_guide(E_breaks, E_labels)
+  ) +
+  theme_minimal() +
+  labs(
+    x = "Temperature (°C)",
+    y = expression("Oxygen,"~p[O[2]]~"(kPa)")#,
+    #title = "Used vs unused T–pO₂ space by mass bin"
+  ) +
+  base_theme +
+  theme(
+    aspect.ratio    = 1,
+    legend.position = "bottom",
+    legend.box      = "horizontal"
+  )
+  
+  plots_occ[[nm]] <- p
+}
+```
+
+```{r fig.height=3, fig.width=3.5, warning=FALSE}
+# -----------------------------
+# Arrange a 2×2 in order: 3, 4, 1, 2
+strip_y <- function(p) p + theme(axis.title.y = element_blank(),
+                                 axis.text.y  = element_blank()#,
+                                 #axis.ticks.y = element_blank()
+                                 )
+strip_x <- function(p) p + theme(axis.title.x = element_blank(),
+                                 axis.text.x  = element_blank()#,
+                                 #axis.ticks.x = element_blank()
+                                 )
+
+uniform_margins <- margin(5.5, 5.5, 5.5, 5.5)
+
+p1 <- plots_occ[[1]] + theme(plot.margin = uniform_margins)   # top-left  (keep y, strip x)
+p2 <- plots_occ[[2]] + theme(plot.margin = uniform_margins)   # top-right (strip y & x)
+
+# p1 keeps both axes
+p2 <- strip_y(p2)
+
+grid_2x2_occurrence <-
+  ((p1 | p2)) +
+  plot_layout(widths = c(1, 1), heights = c(1, 1), guides = "collect") &
+  theme(
+    legend.position      = "bottom",
+    legend.direction     = "horizontal",
+    legend.justification = "center",
+    legend.key.height = unit(dev.size()[1] / 50, "inches")
+  )
+
+grid_2x2_occurrence
+```
+
+
+```{r eval=FALSE, include=T}
+# Example A: 6×4 inches, 300 dpi PNG
+ggsave("F_plotsOccurrences.png", plot = grid_2x2_occurrence,
+       width = 3.5, height = 2.75, units = "in", dpi = 300)
+```
+
+
+# Fig. 4
+
+## Running
+
+```{r}
+# Parameters
+masses   <- c(1e0, 1e4)                                                         # [g]
+Tseq    <- c(5, 25)                                                             # [°C]
+f_seq  <- seq(0.0, 1.0, by = 0.005)                                             # []
+pO2seq <- seq(0, 30, by=0.1)                                                   # [kPa]
+
+
+# Calculate surface
+surf_F_preyspace <- compute_state_surface(
+  tr,                                                                           # consider re-adjusting if you add other functional groups
+  masses = masses,
+  Tseq = Tseq,
+  pO2seq = pO2seq,
+  preys = f_seq,
+  prey_units = "prey_index", 
+  pair_mode = "cross"
+)
+
+## Limitation regimes
+surf_F_preyspace <- add_B_gradients(surf_F_preyspace, tr, method = "perturb", use_norm  = TRUE, prey_axis = "B", d_rel = 0.05, progress = TRUE)
+
+surf_F_preyspace <- add_regime_labels2( # Append regime to the surface
+  surf_F_preyspace,
+  use_derivs = TRUE,
+  dE_thr = 0.01,
+  dO_thr = 0.01
+)
+
+# Regime palette + levels
+reg_levels <- c(
+  "Oxygen exclusion",
+  "Energetic exclusion",
+  "Oxygen limited (strict)",
+  "Oxygen limited (prey sensitive)",
+  "Prey limited (O2-tightening)",
+  "Prey limited (O2-relaxing)"
+)
+
+regime_cols <- c(
+  "Oxygen exclusion"           = "black",
+  "Energetic exclusion"        = "gray60",
+  "Oxygen limited (strict)"             = "#8a5796", #"#674776",
+  "Oxygen limited (prey sensitive)"     = "#BEA0C4",
+  "Prey limited (O2-tightening)"               = "#ADD946", #"#FDE725FF", #"#C0DD3F",
+  "Prey limited (O2-relaxing)"             = "#4DB674"
+)
+```
+
+
+## Available energy
+
+```{r warning=FALSE}
+# Inputs expected:
+# - surf_F_TpO2space with cols: f_ref, mass, T, pO2, E_net_norm
+# - legend_bar_guide(), base_theme already defined
+
+# Breaks/labels for the colorbar
+E_breaks <- seq(0, 1, by = 0.2)
+E_labels <- sprintf("%.1f", E_breaks)
+
+E_min <- min(surf_F_preyspace$E_net_norm, na.rm = TRUE)
+E_max <- max(surf_F_preyspace$E_net_norm, na.rm = TRUE)
+
+# Find unique (T, mass) combos
+combos <- surf_F_preyspace |>
+  dplyr::distinct(T, mass) |>
+  dplyr::arrange(T, mass) |>
+  dplyr::mutate(name = paste0("T=", signif(T, 3), " | m=", signif(mass, 3)))
+
+# Container for plots
+plots_Epreyspace <- vector("list", nrow(combos))
+names(plots_Epreyspace) <- combos$name
+
+# Build plots in a simple for-loop
+for (i in seq_len(nrow(combos))) {
+  f_i <- combos$T[i]
+  m_i <- combos$mass[i]
+  nm  <- combos$name[i]
+
+  df_i <- dplyr::filter(surf_F_preyspace, T == f_i, mass == m_i)
+
+  # Split like your style
+  E_na  <- dplyr::filter(df_i, !is.finite(E_net_norm) | is.na(E_net_norm))
+  E_neg <- dplyr::filter(df_i,  is.finite(E_net_norm) & E_net_norm < 0)
+  E_pos <- dplyr::filter(df_i,  is.finite(E_net_norm) & E_net_norm >= 0) |>
+           dplyr::mutate(E_pos = E_net_norm)
+
+  # Axes ranges & ticks
+  Tx  <- range(df_i$T,  na.rm = TRUE)
+  O2x <- range(df_i$pO2, na.rm = TRUE)
+  x_br <- pretty(Tx, n = 6)
+  y_br <- seq(ceiling(O2x[1]/10)*10, floor(O2x[2]/10)*10, by = 10)
+  if (length(y_br) == 0) y_br <- pretty(O2x, n = 4)
+
+  p <- ggplot() +
+    geom_raster(data = E_na,  aes(f_ref, pO2), fill = "black",  interpolate = FALSE) +
+    geom_raster(data = E_neg, aes(f_ref, pO2), fill = "gray60", interpolate = FALSE) +
+    geom_raster(data = E_pos, aes(f_ref, pO2, fill = pmin(E_pos, 1)), interpolate = FALSE) +
+    geom_contour(
+      inherit.aes = FALSE,
+      data = E_pos, aes(x = f_ref, y = pO2, z = E_pos),
+      breaks = seq(min(E_pos$E_pos), max(E_pos$E_pos), length.out=5), colour = "black", linewidth = 0.3, alpha = 1, linetype = "dashed"
+    ) +
+    # --- NEW: regime boundary (Food limited vs Oxygen limited) ---
+    # Only draw if both regimes are present in this T×mass slice
+    # { if (dplyr::n_distinct(na.omit(df_i$class_id)) >= 2)
+    #     geom_contour(
+    #       inherit.aes = FALSE,
+    #       data = df_i,
+    #       aes(x = f_ref, y = pO2, z = class_id),
+    #       breaks = 3.5,             # midpoint between 3 and 4
+    #       #linetype = "dashed",
+    #       colour = "black",
+    #       linewidth = 0.3
+    #     )
+    #   else NULL } +
+    scale_fill_gradient(
+      low = "white", high = "#67A5CA", na.value = "black",
+      limits = c(0, E_max), breaks = E_breaks, labels = E_labels,
+      oob = scales::squish,
+      name = expression("Available energy"),
+      guide = legend_bar_guide(E_breaks, E_labels)
+    ) +
+    labs(
+      #title = nm,
+      x = "Prey index",
+      y = expression("Oxygen," ~ p[O[2]] ~ "(kPa)")
+    ) +
+    scale_x_continuous(breaks = seq(0, 1, by = 0.2), expand = c(0, 0)) +
+    scale_y_continuous(breaks = seq(min(pO2seq), max(pO2seq), by = 5), expand = c(0, 0)) +
+    #scale_x_continuous(limits = Tx,  breaks = x_br, expand = c(0, 0)) +
+    #scale_y_continuous(limits = O2x, breaks = y_br, expand = c(0, 0)) +
+    base_theme +
+    theme(
+      aspect.ratio    = 1,
+      legend.position = "bottom",
+      legend.box      = "horizontal"
+    )
+
+  plots_Epreyspace[[nm]] <- p
+}
+```
+
+```{r fig.height=4.5, fig.width=3.5, warning=FALSE}
+# helpers
+strip_y <- function(p) p + theme(axis.title.y = element_blank(),
+                                 axis.text.y  = element_blank()#,
+                                 #axis.ticks.y = element_blank()
+                                 )
+strip_x <- function(p) p + theme(axis.title.x = element_blank(),
+                                 axis.text.x  = element_blank()#,
+                                 #axis.ticks.x = element_blank()
+                                 )
+
+# uniform margins so panels line up perfectly
+uniform_margins <- margin(5.5, 5.5, 5.5, 5.5)
+
+# pick plots in requested order
+p1 <- plots_Epreyspace[[1]] + theme(plot.margin = uniform_margins)   # top-left
+p2 <- plots_Epreyspace[[2]] + theme(plot.margin = uniform_margins)   # top-right
+p3 <- plots_Epreyspace[[3]] + theme(plot.margin = uniform_margins)   # bottom-left
+p4 <- plots_Epreyspace[[4]] + theme(plot.margin = uniform_margins)   # bottom-right
+
+# apply axis stripping:
+# top row: no x labels; left keeps y, right strips y
+p1 <- strip_x(p1)                 # keep y
+p2 <- strip_x(strip_y(p2))        # strip y
+
+# bottom row: keep x; left keeps y, right strips y
+p3 <- p3                          # keep y & x
+p4 <- strip_y(p4)                 # strip y, keep x
+
+# assemble 2x2 (p1 p2 / p3 p4)
+grid_preyspace_2x2 <-
+  ((p1 | p2) /
+   (p3 | p4)) +
+  plot_layout(widths = c(1, 1), heights = c(1, 1), guides = "collect") &
+  theme(
+    legend.position      = "bottom",
+    legend.direction     = "horizontal",
+    legend.justification = "center",
+    legend.key.height = unit(dev.size()[1] / 50, "inches")
+  )
+
+grid_preyspace_2x2
+```
+
+```{r eval=FALSE, include=FALSE}
+# Example A: 6×4 inches, 300 dpi PNG
+ggsave("F_plotsE_preyspace.png", plot = grid_preyspace_2x2,
+       width = 3.5, height = 4.5, units = "in", dpi = 500)
+```
+
+
+## Limitation regimes
+
+```{r warning=FALSE}
+# -----------------------------
+# Build per-(f_ref, mass) regime plots over T × pO2
+combos <- surf_F_preyspace %>%
+  distinct(T, mass) %>%
+  arrange(T, mass) %>%
+  mutate(name = paste0("T=", signif(T, 3), " | m=", signif(mass, 3)))
+
+plots_R <- vector("list", nrow(combos))
+names(plots_R) <- combos$name
+
+for (i in seq_len(nrow(combos))) {
+  f_i <- combos$T[i]
+  m_i <- combos$mass[i]
+  nm  <- combos$name[i]
+
+  sub <- surf_F_preyspace %>% filter(T == f_i, mass == m_i)
+
+  # Build a regular grid for crisp borders between categorical tiles
+  xs <- sort(unique(sub$f_ref))
+  ys <- sort(unique(sub$pO2))
+  Z_tbl <- tidyr::pivot_wider(sub[, c("f_ref","pO2","class_id")],
+                              names_from = pO2, values_from = class_id) %>%
+           arrange(T)
+  Z <- as.matrix(Z_tbl[, -1, drop = FALSE])
+
+  # contour at midpoints between integer class IDs
+  brks <- seq(1.5, length(reg_levels) - 0.5, by = 1)
+  grid_for_contour <- expand.grid(f_ref = xs, pO2 = ys)
+  grid_for_contour$class_id <- as.vector(Z)
+
+  # nice axis ticks
+  Tx  <- range(sub$f_ref,  na.rm = TRUE)
+  O2x <- range(sub$pO2, na.rm = TRUE)
+  x_br <- pretty(Tx, n = 6)
+  y_br <- seq(ceiling(O2x[1]/10)*10, floor(O2x[2]/10)*10, by = 10)
+  if (length(y_br) == 0) y_br <- pretty(O2x, n = 4)
+
+  p <- ggplot() +
+    geom_raster(data = sub, aes(f_ref, pO2, fill = regime), interpolate = FALSE) +
+    geom_contour(
+      data = grid_for_contour,
+      aes(x = f_ref, y = pO2, z = class_id),
+      breaks = brks, colour = "gray60", linewidth = 0.3
+    ) +
+    scale_fill_manual(
+      values = regime_cols, drop = FALSE, name = "Regime",
+      guide = guide_legend(
+        nrow = 3, byrow = TRUE,                # stack keys in two rows
+        keywidth  = unit(3, "mm"),
+        keyheight = unit(3, "mm"),
+        override.aes = list(colour = "grey30", linewidth = 0.6)
+      )
+    ) +
+    labs(
+      #title = nm,
+      x = "Prey index",
+      y = expression("Oxygen,"~p[O[2]]~"(kPa)")
+    ) +
+    scale_x_continuous(breaks = seq(min(f_seq), max(f_seq), by = 0.2), expand = c(0, 0)) +
+    scale_y_continuous(breaks = seq(min(pO2seq), max(pO2seq), by = 5), expand = c(0, 0)) +
+    #scale_x_continuous(limits = Tx, breaks = x_br, expand = c(0, 0)) +
+    #scale_y_continuous(limits = O2x, breaks = y_br, expand = c(0, 0)) +
+    base_theme +
+    theme(
+      aspect.ratio     = 1,
+      legend.position  = "bottom",
+      legend.direction = "horizontal",
+      legend.box       = "horizontal",
+      legend.title     = element_blank(),
+      legend.key       = element_rect(colour = "grey50")
+    )
+
+  plots_R[[nm]] <- p
+}
+```
+
+
+```{r fig.height=4.5, fig.width=3.5, warning=FALSE}
+# -----------------------------
+# Arrange a 2×2 in order: 3, 4, 1, 2
+strip_y <- function(p) p + theme(axis.title.y = element_blank(),
+                                 axis.text.y  = element_blank()#,
+                                 #axis.ticks.y = element_blank()
+                                 )
+strip_x <- function(p) p + theme(axis.title.x = element_blank(),
+                                 axis.text.x  = element_blank()#,
+                                 #axis.ticks.x = element_blank()
+                                 )
+
+uniform_margins <- margin(5.5, 5.5, 5.5, 5.5)
+
+p1 <- plots_R[[1]] + theme(plot.margin = uniform_margins)   # top-left  (keep y, strip x)
+p2 <- plots_R[[2]] + theme(plot.margin = uniform_margins)   # top-right (strip y & x)
+p3 <- plots_R[[3]] + theme(plot.margin = uniform_margins)   # bot-left  (keep y & x)
+p4 <- plots_R[[4]] + theme(plot.margin = uniform_margins)   # bot-right (strip y, keep x)
+
+p1 <- strip_x(p1)
+p2 <- strip_y(strip_x(p2))
+# p3 keeps both axes
+p4 <- strip_y(p4)
+
+grid_2x2_regimes <-
+  ((p1 | p2) /
+   (p3 | p4)) +
+  plot_layout(widths = c(1, 1), heights = c(1, 1), guides = "collect") &
+  theme(
+    legend.position      = "bottom",
+    legend.direction     = "horizontal",
+    legend.justification = "center",
+    legend.text  = element_text(size=6, color="black")
+  )
+
+grid_2x2_regimes
+```
+
+```{r eval=T, include=FALSE}
+# Example A: 6×4 inches, 300 dpi PNG
+ggsave("F_plotsE_regimes.png", plot = grid_2x2_regimes,
+       width = 3.5, height = 4.5, units = "in", dpi = 500)
+```
+
+
+# Fig. 5
+
+## Metabolic allocation
+
+```{r}
+# Build a surface for one scenario via compute_state_surface()
+.build_surface_for_scenario <- function(tr, sc_row, masses,
+                                        prey_mode = c("prey_index","feeding_level","powerlaw"),
+                                        T_ref = 10, pO2_ref = 25) {
+  prey_mode <- match.arg(prey_mode)
+  Tj   <- sc_row$T
+  pO2j <- sc_row$pO2
+  fj   <- sc_row$f
+  intj <- sc_row$int
+  slpj <- sc_row$slope
+
+  if (prey_mode %in% c("prey_index","feeding_level")) {
+    compute_state_surface(
+      tr,
+      masses     = masses,
+      Tseq       = Tj,
+      pO2seq     = pO2j,
+      prey_units = prey_mode,   # "prey_index" = fixed B; "feeding_level" = B(T)
+      preys      = fj,          # T
+      pair_mode  = "cross",
+      normalize_E = FALSE,
+      progress    = FALSE,
+      T_ref = T_ref, pO2_ref = pO2_ref
+    ) %>% mutate(scenario = sc_row$scenario)
+  } else {
+    compute_state_surface(
+      tr,
+      masses     = masses,
+      Tseq       = Tj,
+      pO2seq     = pO2j,
+      prey_units = "powerlaw",
+      intercepts = intj,
+      slopes     = slpj,
+      pair_mode  = "cross",
+      normalize_E = FALSE,
+      progress    = FALSE
+    ) %>% mutate(scenario = sc_row$scenario)
+  }
+}
+
+# Convert a surface to Cmax-normalized allocation (long)
+.alloc_long_from_surface <- function(surf, tr) {
+  if (!"unassim" %in% names(surf) || all(!is.finite(surf$unassim))) {
+    if (!("f" %in% names(surf) && "Cmax" %in% names(surf))) {
+      stop("Need 'f' and 'Cmax' to reconstruct unassim; not found in surface.")
+    }
+    surf <- surf %>% mutate(unassim = (1 - tr$epsAssim) * f * Cmax)
+  }
+  surf %>%
+    transmute(
+      scenario, mass,
+      'Available energy'  = pmax(0, ifelse(Cmax > 0 & is.finite(E_net), E_net / Cmax, NA_real_)),
+      #'Unassimilated'     = pmax(0, ifelse(Cmax > 0 & is.finite(unassim), unassim / Cmax, NA_real_)),
+      'Excretion'         = pmax(0, ifelse(Cmax > 0 & is.finite(unassim), unassim*(1/3) / Cmax, NA_real_)),
+      'SDA'               = pmax(0, ifelse(Cmax > 0 & is.finite(unassim), unassim*(2/3) / Cmax, NA_real_)),
+      'Active metabolism' = pmax(0, ifelse(Cmax > 0 & is.finite(M_act),  M_act  / Cmax, NA_real_)),
+      'Basal metabolism'  = pmax(0, ifelse(Cmax > 0 & is.finite(M_m),    M_m    / Cmax, NA_real_))
+    ) %>%
+    tidyr::pivot_longer(
+      #cols = c(`Available energy`,`Unassimilated`,`Active metabolism`,`Basal metabolism`),
+      cols = c('Available energy','Excretion','SDA','Active metabolism','Basal metabolism'),
+      names_to = "component", values_to = "value"
+    ) %>%
+    # mutate(component = factor(component,
+    #                           levels = c("Available energy","Unassimilated",
+    #                                      "Active metabolism","Basal metabolism")))
+    mutate(component = factor(component,
+                              levels = c("Available energy","Excretion","SDA",
+                                         "Active metabolism","Basal metabolism")))
+}
+
+# Optional light smoothing over log10(mass)
+.smooth_alloc <- function(df, n = 400) {
+  safe_spline <- function(x, y) {
+    ok <- is.finite(x) & is.finite(y); x <- x[ok]; y <- y[ok]
+    if (!length(x)) return(function(xx) rep(NA_real_, length(xx)))
+    x <- x[order(x)]; y <- y[order(x)]
+    xu <- unique(x); yu <- vapply(xu, function(xx) mean(y[x==xx]), numeric(1))
+    if (length(xu) == 1L) return(function(xx) rep(yu[1], length(xx)))
+    if (length(xu) == 2L) return(approxfun(xu, yu))
+    tryCatch(splinefun(xu, yu, method="hyman"), error = function(e) splinefun(xu, yu, method="fmm"))
+  }
+  comps <- levels(df$component)
+  xr <- range(log10(df$mass[is.finite(df$mass) & df$mass>0]), na.rm = TRUE)
+  xs <- seq(xr[1], xr[2], length.out = n)
+  dplyr::bind_rows(lapply(comps, function(cc){
+    sub <- dplyr::filter(df, component == cc)
+    s   <- safe_spline(log10(sub$mass), sub$value)
+    tibble::tibble(mass = 10^xs, component = factor(cc, levels = comps), value = pmax(0, s(xs)))
+  }))
+}
+
+# Plot one scenario (returns ggplot)
+.plot_alloc <- function(df_alloc, scenario_label,
+                        mass_breaks, mass_labels_fun,
+                        stack_cols = c(
+                          "Available energy"  = "#67A5CA",
+                          "Excretion"         = "gray90",
+                          "SDA"               = "#e0bce8", #"gray75",
+                          #"Unassimilated"     = "gray85",
+                          "Active metabolism" = "#8a5796", #"gray60",
+                          "Basal metabolism"  = "#440154" #"black"
+                        )) {
+  x_min <- min(df_alloc$mass, na.rm = TRUE)
+  x_max <- max(df_alloc$mass, na.rm = TRUE)
+  ggplot(df_alloc, aes(x = mass, y = value, fill = component)) +
+    geom_area(position = "stack", color = "grey15", linewidth = 0.3) +
+    #scale_fill_manual(values = stack_cols, name = NULL) +
+    scale_fill_manual(
+      values = stack_cols,
+      drop   = FALSE,
+      name   = "Process",
+      guide  = guide_legend(
+        nrow = 1, byrow = TRUE,              # <-- one rows
+        keywidth  = unit(3, "mm"),
+        keyheight = unit(3,  "mm"),
+        override.aes = list(                  # <-- add grey border to swatches
+          colour   = "grey50",
+          size      = 0.5,                     # border thickness (stroke)
+          linewidth = 0.5
+        )
+      )
+    ) +
+    labs(
+      #title = scenario_label,
+      x = "Individual size (g)",
+      #y = expression("Metabolic allocation " * (italic(C)[max] * "-normalized"))
+      y = expression("Metabolic allocation")
+    ) +
+    scale_x_log10(
+      limits = c(x_min, x_max),
+      breaks = mass_breaks,
+      labels = mass_labels_fun,
+      expand = c(0, 0)
+    ) +
+    scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+    base_theme +
+    theme(
+      aspect.ratio   = 1,
+      legend.position = "bottom",
+      legend.text  = element_text(size=6, color="black"),
+      legend.key = element_rect(colour = "gray50"),
+      legend.title      = element_blank()
+    ) 
+}
+
+# ==========================================================
+# PUBLIC: returns a LIST of ggplots (no combination)
+# ==========================================================
+make_allocation_plots <- function(tr, scenarios, mass_grid,
+                                  prey_mode = c("prey_index","feeding_level","powerlaw"),
+                                  smooth = TRUE,
+                                  T_ref = 10, pO2_ref = 25,
+                                  mass_breaks = 10^seq(-2, 5, by = 1),
+                                  mass_labels_fun = function(b) parse(text = paste0("10^", log10(b)))
+                                  ) {
+  prey_mode <- match.arg(prey_mode)
+
+  out_plots <- vector("list", nrow(scenarios))
+  names(out_plots) <- as.character(scenarios$scenario)
+
+  for (j in seq_len(nrow(scenarios))) {
+    sc_row <- scenarios[j, , drop = FALSE]
+
+    # 1) surface
+    surf <- .build_surface_for_scenario(tr, sc_row, masses = mass_grid,
+                                        prey_mode = prey_mode,
+                                        T_ref = T_ref, pO2_ref = pO2_ref)
+
+    # 2) allocation
+    alloc_long <- .alloc_long_from_surface(surf, tr)
+
+    # 3) optional smoothing
+    if (isTRUE(smooth)) {
+      alloc_long <- alloc_long %>%
+        group_by(scenario) %>%
+        group_modify(~ .smooth_alloc(.x)) %>%
+        ungroup()
+    }
+
+    # 4) plot
+    lbl <- paste0(
+      as.character(sc_row$scenario), "\n"#,
+      #sc_row$T, "°C, ", sc_row$pO2, " kPa, f = ", sc_row$f
+    )
+    out_plots[[j]] <- .plot_alloc(alloc_long %>% filter(scenario == sc_row$scenario),
+                                  scenario_label = lbl,
+                                  mass_breaks = mass_breaks,
+                                  mass_labels_fun = mass_labels_fun)
+  }
+
+  out_plots  # return list only
+}
+```
+
+
+```{r}
+scenarios <- tibble::tibble(
+  scenario = factor(c("Baseline","Hyperthermic","Hypoxic","Oligotrophic"),
+                    levels = c("Baseline","Hyperthermic","Hypoxic","Oligotrophic")),
+  T   = c(10, 40, 10,  10),
+  pO2 = c(25, 25, 10, 25),
+  f   = c(0.75,0.75,0.75,0.5),
+  # scenario = factor(c("Baseline", "Hyperthermic +\nHypoxic", "Hypoxic +\nOligotrophic", "Hyperthermic +\nOligotrophic"),
+  #                  levels = c("Baseline", "Hyperthermic +\nHypoxic", "Hypoxic +\nOligotrophic", "Hyperthermic +\nOligotrophic")),
+  # T   = c(10, 30, 10,  30),
+  # pO2 = c(25, 10, 10, 25),
+  # f   = c(0.75,0.75,0.5,0.5),
+  int = c(1.6, 1.6, 1.6, 0.6),
+  slope = c(-0.08, -0.08, -0.08, -0.08)
+)
+
+mass_grid <- 10^seq(-2, 5, length.out = 300)                  # 1e-2 ... 1e6
+mass_breaks <- 10^seq(-2, 5, by = 1)
+mass_labels <- function(b) parse(text = paste0("10^", log10(b)))  # 10^-2, 10^-1, ..., 10^6
+
+# ======================
+# EXAMPLE USAGE
+# ======================
+# Choose prey_mode:
+#   "prey_index"    -> fixed B from f at (T_ref, pO2_ref)
+#   "feeding_level" -> dynamic B(T) so f is held across temperature (pO2_ref fixed)
+#   "powerlaw"      -> uses scenario$int and scenario$slope
+plots_alloc <- make_allocation_plots(
+  tr,
+  scenarios   = scenarios,       # your 4-scenario tibble
+  mass_grid   = mass_grid,       # 10^-2 ... 10^6
+  prey_mode   = "prey_index",    # "prey_index" / "feeding_level" / "powerlaw"
+  smooth      = TRUE
+)
+
+# Use individually, e.g.:
+plots_alloc[[1]]
+# or stitch later with patchwork / cowplot as you prefer
+```
+
+
+```{r fig.height=2.5, fig.width=6.5, warning=FALSE}
+# Helper: remove y-axis text/title/ticks from a plot
+strip_y <- function(p) {
+  p + theme(
+    axis.title.y = element_blank(),
+    axis.text.y  = element_blank()#,
+    #axis.ticks.y = element_blank()
+  )
+}
+
+# Ensure identical margins so panels line up perfectly
+uniform_margins <- margin(8,8,8,8)  # tweak if needed
+plots_alloc[[1]] <- plots_alloc[[1]] + theme(plot.margin = uniform_margins)
+plots_alloc[[2]]     <- plots_alloc[[2]]     + theme(plot.margin = uniform_margins)
+plots_alloc[[3]]      <- plots_alloc[[3]]      + theme(plot.margin = uniform_margins)
+plots_alloc[[4]] <- plots_alloc[[4]] + theme(plot.margin = uniform_margins)
+
+# Assemble: left plot keeps y-axis; others are stripped
+p_F_metaballoc <-
+  (plots_alloc[[1]] | strip_y(plots_alloc[[2]]) | strip_y(plots_alloc[[3]]) | strip_y(plots_alloc[[4]])) +
+  plot_layout(widths = c(1, 1, 1, 1), guides = "collect") &  # use "collect" if you want a single legend
+  theme(legend.position = "bottom"
+        #legend.key = element_rect(colour = "gray50"),
+        # legend.key.height = unit(dev.size()[1] / 50, "inches"),
+        # legend.key.width = unit(dev.size()[1] / 50, "inches")
+        )
+
+p_F_metaballoc
+```
+
+```{r eval=T, include=FALSE}
+ggsave("F_metaballoc_feedinglvl.png", plot = p_F_metaballoc,
+       width = 6.5, height = 2.5, units = "in", dpi = 500)
+```
+
+
+# Fig. 6
+
+## Cruising speed
+
+```{r}
+# Parameters
+masses   <- c(1e0, 1e4)                                                         # [g]
+Tseq    <- c(5, 25)                                                             # [°C]
+f_seq  <- seq(0.0, 1.0, by = 0.005)                                             # []
+pO2seq <- c(5, 25)                                                             # [kPa]
+
+
+# Calculate surface
+surf_F_speed <- compute_state_surface(
+  tr,                                                                           # consider re-adjusting if you add other functional groups
+  masses = masses,
+  Tseq = Tseq,
+  pO2seq = pO2seq,
+  preys = f_seq,
+  prey_units = "prey_index", 
+  pair_mode = "cross"
+)
+
+## Limitation regimes
+surf_F_speed <- add_B_gradients(surf_F_speed, tr, method = "perturb", use_norm  = TRUE, prey_axis = "B", d_rel = 0.05, progress = TRUE)
+
+surf_F_speed <- add_regime_labels2( # Append regime to the surface
+  surf_F_speed,
+  use_derivs = TRUE,
+  dE_thr = 0.01,
+  dO_thr = 0.01
+)
+
+# Regime palette + levels
+reg_levels <- c(
+  "Oxygen exclusion",
+  "Energetic exclusion",
+  "Oxygen limited (strict)",
+  "Oxygen limited (prey sensitive)",
+  "Prey limited (O2-tightening)",
+  "Prey limited (O2-relaxing)"
+)
+
+regime_cols <- c(
+  "Oxygen exclusion"           = "black",
+  "Energetic exclusion"        = "gray60",
+  "Oxygen limited (strict)"             = "#8a5796", #"#674776",
+  "Oxygen limited (prey sensitive)"     = "#BEA0C4",
+  "Prey limited (O2-tightening)"               = "#ADD946", #"#FDE725FF", #"#C0DD3F",
+  "Prey limited (O2-relaxing)"             = "#4DB674"
+)
+```
+
+
+```{r fig.height=4.5, fig.width=3.5}
+# Make mass a factor so we can control line thickness cleanly
+surf_F_speed2 <- surf_F_speed %>%
+  mutate(mass_f = factor(mass))   # levels "1" and "10000" for 1e0 and 1e4
+
+## 1. Cruising speed vs prey index by temperature (colors), for both masses ----
+##    Filter to one oxygen level to avoid duplicates (adjust as needed)
+
+surf_T <- surf_F_speed2 %>%
+  filter(pO2 == 25)   # choose the O2 level you want here
+
+p_T <- ggplot(
+  surf_T,
+  aes(x = f_ref,
+      y = U_opt,
+      colour = factor(T),
+      size   = mass_f,
+      group  = interaction(mass_f, T))
+  ) +
+  geom_line() +
+  #scale_x_log10()+
+  scale_color_manual(
+    name   = "Temperature (°C)",
+    values = c('5' = "#F4A3A3",   # light red (low T)
+               '25' = "#B2182B")  # darker red (high T)
+  ) +
+  scale_size_manual(
+    name   = "Individual size (g)",
+    values = c('1' = 1,         # thin line for 1 g
+               '10000' = 3),    # thicker line for 10^4 g
+    labels = c('1' = "1 g", `10000` = expression(10^4~"g"))
+  ) +
+  labs(
+    x = "Prey index",
+    y = "Cruising speed (m/s)"
+  ) +
+  base_theme +
+  theme(
+    aspect.ratio     = 1,
+    legend.position  = "bottom",
+    legend.direction = "horizontal",
+    legend.box       = "horizontal",
+    #legend.title     = element_blank(),
+    legend.key       = element_blank()
+  )
+
+
+## 2. Cruising speed vs prey index by oxygen (colors), for both masses ----
+##    Filter to one temperature level to avoid duplicates (adjust as needed)
+
+surf_O2 <- surf_F_speed2 %>%
+  filter(T == 5)   # choose the T level you want here
+
+p_O2 <- ggplot(
+  surf_O2,
+  aes(x = f_ref,
+      y = U_opt,
+      colour = factor(pO2),
+      size   = mass_f,
+      group  = interaction(mass_f, pO2))
+  ) +
+  geom_line() +
+  scale_color_manual(
+    name   = expression("Oxygen," ~ p[O[2]] ~ "(kPa)"),
+    values = c('5' = "#8A5796",  # low O2 (darker purple)
+               '25' = "#BEA0C4")  # high O2 (lighter purple)
+  ) +
+  scale_size_manual(
+    name   = "Individual size (g)",
+    values = c('1' = 1,
+               '10000' = 3),
+    labels = c('1' = "1 g", '10000' = expression(10^4~"g"))
+  ) +
+  labs(
+    x = "Prey index",
+    y = "Cruising speed (m/s)"
+  ) +
+  base_theme +
+  theme(
+    aspect.ratio     = 1,
+    legend.position  = "bottom",
+    legend.direction = "horizontal",
+    legend.box       = "horizontal",
+    #legend.title     = element_blank(),
+    legend.key       = element_blank()
+  )
+
+p_T
+p_O2
+```
+
+```{r fig.height=4.5, fig.width=3.5, warning=FALSE}
+# Make mass a factor so we can control line thickness cleanly
+surf_F_speed2 <- surf_F_speed %>%
+  mutate(mass_f = factor(mass))   # levels "1" and "10000" for 1e0 and 1e4
+
+# --- Define the three scenarios explicitly -----------------------------------
+
+surf_baseline <- surf_F_speed2 %>%
+  filter(T == 5, pO2 == 25) %>%
+  mutate(series = "Baseline\n(5°C, 25 kPa)")
+
+surf_warm <- surf_F_speed2 %>%
+  filter(T == 25, pO2 == 25) %>%
+  mutate(series = "Hyperthermic\n(25°C, 25 kPa)")
+
+surf_hypox <- surf_F_speed2 %>%
+  filter(T == 5, pO2 == 5) %>%
+  mutate(series = "Hypoxic\n(5°C, 5 kPa)")
+
+surf_all <- bind_rows(surf_baseline, surf_warm, surf_hypox) %>%
+  mutate(
+    series = factor(
+      series,
+      levels = c(
+        "Baseline\n(5°C, 25 kPa)",
+        "Hyperthermic\n(25°C, 25 kPa)",
+        "Hypoxic\n(5°C, 5 kPa)"
+      )
+    )
+  )
+
+# --- Color mapping for the 3 conditions --------------------------------------
+
+series_cols <- c(
+  "Baseline\n(5°C, 25 kPa)" = "gray60",
+  "Hyperthermic\n(25°C, 25 kPa)"    = "#B2182B",  # warm, dark red
+  "Hypoxic\n(5°C, 5 kPa)"   = "#8A5796"   # low O2, purple
+)
+
+# --- Plot: baseline in back, then warm & hypoxia on top ----------------------
+
+p_Ulines_all <- ggplot() +
+  # Baseline first (so it's in the back)
+  geom_line(
+    data = surf_all %>% filter(series == "Baseline\n(5°C, 25 kPa)"),
+    aes(
+      x     = f_ref,
+      y     = U_opt,
+      colour = series,
+      size   = mass_f,
+      group  = interaction(mass_f, series)
+    )
+  ) +
+  # Warm + hypoxia on top
+  geom_line(
+    data = surf_all %>% filter(series != "Baseline\n(5°C, 25 kPa)"),
+    aes(
+      x     = f_ref,
+      y     = U_opt,
+      colour = series,
+      size   = mass_f,
+      group  = interaction(mass_f, series)
+    )
+  ) +
+  scale_color_manual(
+    name   = "Condition",
+    values = series_cols
+  ) +
+  scale_size_manual(
+    name   = "Individual size (g)",
+    values = c("1" = 1, "10000" = 3),
+    labels = c("1" = "1 g", "10000" = "10 kg")
+  ) +
+  labs(
+    x = "Prey index",
+    y = "Cruising speed (m/s)"
+  ) +
+  base_theme +
+  theme(
+    aspect.ratio        = 1,
+    legend.position     = "bottom",
+    legend.box          = "horizontal",
+    legend.direction    = "horizontal",
+    legend.key          = element_blank(),
+    legend.title.align  = 0.5   # center the title over the keys
+  ) +
+  guides(
+    size = guide_legend(
+      title          = "Individual size (g)",
+      ncol           = 1,
+      title.position = "top"     # title above size keys
+    ),
+    colour = guide_legend(
+      title          = "Condition",
+      ncol           = 1,
+      title.position = "top"     # title above color keys
+    )
+  )
+
+p_Ulines_all
+```
+
+```{r fig.height=3, fig.width=3.5, warning=FALSE}
+p_Ulines_all <- ggplot() +
+  # Baseline first (so it's in the back)
+  geom_line(
+    data = surf_all %>% filter(series == "Baseline\n(5°C, 25 kPa)"),
+    aes(
+      x      = f_ref,
+      y      = U_opt,
+      colour = series,
+      size   = mass_f,
+      group  = interaction(mass_f, series)
+    )
+  ) +
+  # Warm + hypoxia on top
+  geom_line(
+    data = surf_all %>% filter(series != "Baseline\n(5°C, 25 kPa)"),
+    aes(
+      x      = f_ref,
+      y      = U_opt,
+      colour = series,
+      size   = mass_f,
+      group  = interaction(mass_f, series)
+    )
+  ) +
+  scale_color_manual(
+    name   = "Condition",
+    values = series_cols
+  ) +
+  scale_size_manual(
+    name   = "Individual size (g)",
+    values = c("1" = 0.7, "10000" = 2),
+    labels = c("1" = "1 g", "10000" = "10 kg")
+  ) +
+  labs(
+    x = "Prey index",
+    y = "Cruising speed (m/s)"
+  ) +
+  base_theme +
+  theme(
+    aspect.ratio       = 1,
+    legend.position    = "right",
+    legend.box         = "vertical",    # stack the two legends vertically
+    legend.direction   = "vertical",    # keys within each legend arranged top-to-bottom
+    legend.key         = element_blank(),
+    legend.title.align = 0.5
+  ) +
+  guides(
+    size = guide_legend(
+      title          = "Individual size (g)",
+      ncol           = 1,              # one column -> vertical keys
+      title.position = "top"
+    ),
+    colour = guide_legend(
+      title          = "Condition",
+      ncol           = 1,              # one column -> vertical keys
+      title.position = "top"
+    )
+  )
+
+p_Ulines_all
+
+```
+
+
+```{r eval=T, include=FALSE}
+# Example A: 6×4 inches, 300 dpi PNG
+ggsave("F_plotsU_lines.png", plot = p_Ulines_all,
+       width = 3.5, height = 3, units = "in", dpi = 500)
+```
+
+
+## Data
+
+```{r}
+LOCAL_PATH <- "/data_out"
+PATH <- paste0(gsub("scratch", "scratch", here()), LOCAL_PATH)                  ##PATH <- paste0(gsub("scratch", "project", here()), LOCAL_PATH)   ## use if environment can see mirrored Project folder
+speed_df <- read.csv(paste0(PATH, "/speed.csv"), fileEncoding = "latin1")
+```
+
+```{r}
+# Parameters
+masses   <- 10^seq(-1, 6.5, length.out = 300)                                                         # [g]
+Tseq    <- c(5)                                                             # [°C]
+f_seq  <- c(0.9)                                             # []
+pO2seq <- c(25)                                                             # [kPa]
+
+
+# Calculate surface
+line_F_speed <- compute_state_surface(
+  tr,                                                                           # consider re-adjusting if you add other functional groups
+  masses = masses,
+  Tseq = Tseq,
+  pO2seq = pO2seq,
+  preys = f_seq,
+  prey_units = "prey_index", 
+  pair_mode = "cross"
+)
+
+
+# Fit power law to theoretical U_opt vs mass
+fit_theory <- lm(
+  log10(U_opt) ~ log10(mass),
+  data = line_F_speed
+)
+
+summary(fit_theory)   # slope b_th, intercept a_th
+
+a_th <- coef(fit_theory)[1]   # log10(c_th)
+b_th <- coef(fit_theory)[2]   # theoretical scaling exponent
+
+```
+
+
+```{r fig.height=4.5, fig.width=3.5, warning=FALSE}
+# Dummy length–weight (TL in cm → mass in g)
+a_dummy <- 0.010
+b_dummy <- 3.00
+
+# 1. Add mass (g) from length (cm)
+#    M = a * L^b, with a ≈ 0.01, b ≈ 3
+speed_df2 <- speed_df %>%
+  mutate(
+    mass_g = a_dummy * (length^b_dummy)   # mass in grams
+  )
+
+# 2. Fit power law: log10(U) = a + b * log10(mass)
+fit_free <- lm(
+  log10(speed_mpers) ~ log10(mass_g),
+  data = speed_df2
+)
+
+summary(fit_free)   # look at slope b_hat and its SE
+
+# Extract slope and intercept for the free model
+a_hat <- coef(fit_free)[1]             # log10(c_hat)
+b_hat <- coef(fit_free)[2]             # scaling exponent
+
+# 3. Fit model with slope fixed to 1/6:
+#    log10(U) = log10(c_1_6) + (1/6)*log10(mass)
+fit_1_6 <- lm(
+  log10(speed_mpers) ~ offset((1/6) * log10(mass_g)),
+  data = speed_df2
+)
+
+c_1_6 <- 10^coef(fit_1_6)[1]          # c for the constrained 1/6 model
+```
+
+```{r fig.height=3, fig.width=3.5, warning=FALSE}
+library(tibble)
+
+# Data frame for the two empirical straight lines
+abline_df <- tibble(
+  slope       = c(b_hat,        1/6),
+  intercept   = c(a_hat,        log10(c_1_6)),
+  relationship = c("Empirical fit",
+                   "Empirical w^(1/6) fit")
+)
+
+p_Usize <- ggplot(speed_df2, aes(x = mass_g, y = speed_mpers)) +
+  geom_point(alpha = 0.7, show.legend = FALSE, size=0.5) +
+  
+  # Empirical lines: use data + aesthetics for slope/intercept & legend mapping
+  geom_abline(
+    data = abline_df,
+    aes(
+      slope     = slope,
+      intercept = intercept,
+      colour    = relationship,
+      linetype  = relationship
+    ),
+    size = 1
+  ) +
+  
+  # Theoretical curve from line_F_speed (model output)
+  geom_line(
+    data = line_F_speed,
+    aes(
+      x        = mass,
+      y        = U_opt,
+      colour   = "Model prediction",
+      linetype = "Model prediction"
+    ),
+    inherit.aes = FALSE,
+    size        = 1
+  ) +
+  
+  scale_x_log10() +
+  scale_y_log10() +
+  labs(
+    x = "Individual size (g)",
+    y = "Cruising speed (m/s)"
+  ) +
+  
+  # Manual scales for colour and linetype, same labels & name so they merge
+  scale_color_manual(
+    name   = "Relationship",
+    values = c(
+      "Empirical fit"          = "black",
+      "Empirical w^(1/6) fit"  = "black",
+      "Model prediction"       = "#67A5CA"
+    )
+  ) +
+  scale_linetype_manual(
+    name   = "Relationship",
+    values = c(
+      "Empirical fit"          = "solid",
+      "Empirical w^(1/6) fit"  = "dashed",
+      "Model prediction"       = "solid"
+    )
+  ) +
+  guides(
+    colour   = guide_legend(title.position = "top", ncol = 1),
+    linetype = guide_legend(title.position = "top", ncol = 1)
+  ) +
+  
+  base_theme +
+  theme(
+    aspect.ratio       = 1,
+    legend.position    = "right",
+    legend.box         = "horizontal",
+    legend.direction   = "horizontal",
+    legend.key         = element_blank(),
+    legend.title.align = 0.5
+  )
+
+p_Usize
+```
+
+```{r eval=T, include=FALSE}
+# Example A: 6×4 inches, 300 dpi PNG
+ggsave("F_plotsU_size.png", plot = p_Usize,
+       width = 3.5, height = 3, units = "in", dpi = 500)
+```
+
+```{r}
+b_se   <- summary(fit_free)$coef["log10(mass_g)", "Std. Error"]
+t_stat <- (b_hat - 1/6) / b_se
+t_stat
+# Compare |t_stat| to ~2 for a rough 95% check, or get p-value:
+p_val  <- 2 * pt(-abs(t_stat), df = df.residual(fit_free))
+p_val
+```
+
+
+
+
+
+# Tests
+
+## Aerobic Scopes
+
+```{r}
+# Parameters
+masses   <- c(1e0, 1e4)                                                         # [g]
+Tseq    <- c(5, 25)                                                             # [°C]
+f_seq  <- seq(0.0, 1.0, by = 0.005)                                             # []
+pO2seq <- seq(0, 30, by=0.1)                                                   # [kPa]
+
+
+# Calculate surface
+surf_F_preyspace <- compute_state_surface(
+  tr,                                                                           # consider re-adjusting if you add other functional groups
+  masses = masses,
+  Tseq = Tseq,
+  pO2seq = pO2seq,
+  preys = f_seq,
+  prey_units = "prey_index", 
+  pair_mode = "cross"
+)
+
+surf_F_preyspace <- surf_F_preyspace %>%
+  mutate(M_sda = 0.2 * consump)
+```
+
+```{r}
+# --- 1) Build MT + scenario labels ---
+df_plot <- surf_F_preyspace %>%
+  mutate(
+    M_T = (M_m + M_act + M_sda) / M_m,
+    scenario = case_when(
+      T == 5  & f_ref == 0.8 ~ "Baseline / Hypoxic (T=5, f_ref=0.8)",
+      T == 25 & f_ref == 0.8 ~ "Hyperthermic (T=25, f_ref=0.8)",
+      T == 5  & f_ref == 0.4 ~ "Low food (T=5, f_ref=0.4)",
+      TRUE ~ NA_character_
+    ),
+    scenario = factor(
+      scenario,
+      levels = c(
+        "Baseline / Hypoxic (T=5, f_ref=0.8)",
+        "Hyperthermic (T=25, f_ref=0.8)",
+        "Low food (T=5, f_ref=0.4)"
+      )
+    )
+  ) %>%
+  # Keep only the scenario families we want
+  filter(!is.na(scenario)) %>%
+  # Keep only the masses of interest
+  filter(mass %in% c(1e0, 1e4))
+
+# --- 2) Make two "sub-scenarios" inside the T=5, f_ref=0.8 family:
+#         baseline (pO2=25 reference point) vs hypoxic (pO2=10 reference point)
+#         This is just for labeling emphasis; both are already represented along the pO2 curve.
+df_plot <- df_plot %>%
+  mutate(
+    scenario2 = case_when(
+      scenario == "Baseline / Hypoxic (T=5, f_ref=0.8)" ~ "Baseline (T=5, f_ref=0.8)",
+      scenario == "Hyperthermic (T=25, f_ref=0.8)" ~ "Hyperthermic (T=25, f_ref=0.8)",
+      scenario == "Low food (T=5, f_ref=0.4)" ~ "Low food (T=5, f_ref=0.4)",
+      TRUE ~ as.character(scenario)
+    ),
+    scenario2 = factor(
+      scenario2,
+      levels = c(
+        "Baseline (T=5, f_ref=0.8)",
+        "Hyperthermic (T=25, f_ref=0.8)",
+        "Low food (T=5, f_ref=0.4)"
+      )
+    )
+  )
+
+# --- 3) Plot: facet by mass (gives you both plots in one figure) ---
+p_MT_pO2 <- ggplot(df_plot, aes(x = pO2, y = M_T, colour = scenario2)) +
+  geom_line(linewidth = 1.1) +
+  facet_wrap(~ mass, scales = "free_y", labeller = label_bquote(mass == .(mass))) +
+  labs(
+    x = expression(pO[2]~"(kPa)"),
+    y = expression(M[T]~"="~M[m] + M[act] + M[sda]),
+    colour = "Scenario"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    legend.position = "right",
+    panel.grid.minor = element_blank()
+  )
+
+p_MT_pO2
+
+
+# --- 4) Plot: facet by mass (gives you both plots in one figure) ---
+p_MT_U <- ggplot(df_plot, aes(x = pO2, y = U_opt, colour = scenario2)) +
+  geom_line(linewidth = 1.1) +
+  facet_wrap(~ mass, scales = "free_y", labeller = label_bquote(mass == .(mass))) +
+  labs(
+    x = expression(pO[2]~"(kPa)"),
+    y = expression(U),
+    colour = "Scenario"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    legend.position = "right",
+    panel.grid.minor = element_blank()
+  )
+
+p_MT_U
+```
+
+
+## Q10 tests
+
+```{r}
+# --- 1) Effective-Q10 helper (works on E_net or E_net_norm) -------------
+Q10_eff <- function(val_T1, val_T2, T1, T2) (val_T2/val_T1)^(10/(T2 - T1))
+
+q10_grid <- function(surf, T1, T2, value_col = c("E_net", "E_net_norm", "E_mass_norm"),
+                     hold_cols = c("mass","pO2")) {
+  value_col <- match.arg(value_col)
+  d1 <- subset(surf, T == T1)
+  d2 <- subset(surf, T == T2)
+  key <- hold_cols
+  m   <- merge(d1[, c(key, value_col)], d2[, c(key, value_col)],
+               by = key, suffixes = c("1","2"))
+  names(m)[names(m) == paste0(value_col,"1")] <- "v1"
+  names(m)[names(m) == paste0(value_col,"2")] <- "v2"
+  transform(m, Q10 = Q10_eff(v1, pmax(v2, 1e-12), T1, T2))
+}
+
+
+T1 <- 10; T2 <- 20
+masses  <- c(1e0, 1e2, 1e4)
+pO2_vec <- seq(0, 30, by = 1)
+f_ref   <- 0.6
+
+# (i) Fixed prey density across T: "prey_index"
+surf_fixed <- compute_state_surface(
+  tr, masses, Tseq = c(T1, T2), pO2seq = pO2_vec,
+  prey_units = "prey_index", preys = f_ref, pair_mode = "cross",
+  normalize_E = TRUE
+)
+surf_fixed$E_mass_norm <- surf_fixed$E_net / surf_fixed$mass ^ 0.75
+q10_fixed <- q10_grid(surf_fixed, T1, T2, value_col = "E_mass_norm")
+
+# (ii) Keep feeding level constant vs T (B recalculated at each T): "feeding_level"
+surf_covary <- compute_state_surface(
+  tr, masses, Tseq = c(T1, T2), pO2seq = pO2_vec,
+  prey_units = "feeding_level", preys = f_ref, pair_mode = "cross",
+  normalize_E = TRUE
+)
+surf_covary$E_mass_norm <- surf_covary$E_net / surf_covary$mass ^ 0.75
+q10_covary <- q10_grid(surf_covary, T1, T2, value_col = "E_mass_norm")
+
+# Quick visualization: realized Q10 distributions
+viz_q10 <- bind_rows(
+  mutate(q10_fixed,  mode = "Fixed prey (prey_index)"),
+  mutate(q10_covary, mode = "Constant f (feeding_level)")
+)
+ggplot(viz_q10, aes(x = pO2, y = Q10, color = factor(mass))) +
+  #geom_point(position = position_jitter(width = 0.2, height = 0), alpha = 0.8) +
+  geom_line(alpha = 0.8) +
+  geom_hline(yintercept = 1.1, linetype = 2) +
+  facet_wrap(~ mode) +
+  scale_y_continuous(limits = c(0.6, 3)) +
+  scale_color_brewer(palette = "Dark2", name = "Mass (g)") +
+  labs(x = expression(p[O[2]]~"(kPa)"),
+       y = expression("Realized " * Q[10] * " of " * nu),
+       title = "Effective Q10 of available energy across O2 and size") +
+  theme_minimal(base_size = 12)
+```
+
+
+```{r}
+# ---------------------------
+# Config
+# ---------------------------
+Tseq_plot   <- seq(0, 30, by = 0.5)
+masses_plot <- c(1, 1e4)             # 1 g and 10 kg
+pO2_vals    <- c(25, 15, 5)
+f_ref       <- 0.6
+
+# ---------------------------
+# Build surface (keeps your style)
+# Choose either prey_index or feeding_level; here: feeding_level
+# ---------------------------
+surf <- compute_state_surface(
+  tr, masses_plot, Tseq = Tseq_plot, pO2seq = pO2_vals,
+  prey_units = "prey_index", preys = f_ref, pair_mode = "cross",
+  normalize_E = TRUE
+) %>%
+  mutate(
+    E_mass_norm = E_net / (mass ^ 0.75),
+    mass_lab = factor(ifelse(mass < 10, "1 g", "10 kg"),
+                      levels = c("1 g","10 kg")),
+    pO2_lab  = factor(paste0(pO2, " kPa"), levels = paste0(pO2_vals, " kPa"))
+  ) %>%
+  filter(E_mass_norm > 0)   # log-scale safe-guard
+
+# ---------------------------
+# Reference Q10 lines (Q10 = 2 and Q10 = 1)
+# In log10-space, slope m = log10(Q10)/10 per °C, anchor at (T0=10, y0=10)
+# ---------------------------
+T0 <- 10
+y0 <- 10
+m_Q10_2 <- log10(2) / 10
+m_Q10_1 <- log10(1.1) / 10#0
+
+b0_Q10_2 <- log10(y0) - m_Q10_2 * T0
+b0_Q10_1 <- log10(y0) - m_Q10_1 * T0
+
+ref_lines <- tibble(
+  T = rep(Tseq_plot, 2),
+  E_ref = c(10^(b0_Q10_2 + m_Q10_2*Tseq_plot),
+            10^(b0_Q10_1 + m_Q10_1*Tseq_plot)),
+  ref = rep(c("Q10 = 2.0 (ref)", "Q10 = 1.1 (ref)"), each = length(Tseq_plot))
+)
+
+# ---------------------------
+# Plot (points only for your model outputs)
+# ---------------------------
+ggplot() +
+  # Reference Q10 lines
+  geom_line(data = ref_lines,
+            aes(x = T, y = E_ref, linetype = ref),
+            color = "grey30", linewidth = 0.8) +
+
+  # Model points by pO2 (no fits)
+  geom_point(data = surf,
+             aes(x = T, y = E_net, color = pO2_lab),
+             size = 1.6, alpha = 0.9) +
+
+  facet_wrap(~ mass_lab, nrow = 1) +
+
+  scale_y_log10(
+    breaks = c(1, 10, 100),
+    limits = c(1, 100),
+    labels = scales::label_number(accuracy = 1)
+  ) +
+  scale_color_brewer(palette = "Dark2", name = expression(p[O[2]]~"(kPa)")) +
+  scale_linetype_manual(values = c("Q10 = 2.0 (ref)" = "dashed",
+                                   "Q10 = 1.1 (ref)" = "solid"),
+                        name = "Reference Q10") +
+
+  labs(x = "Temperature (°C)",
+       y = expression(E[mass~norm]),
+       title = expression("Available energy vs temperature (points only)"),
+       subtitle = "Colors = pO2 (kPa); grey lines = Q10 reference slopes") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "right")
+
+```
+
+
+```{r}
+# -----------------------------
+# Config
+# -----------------------------
+f_target <- 0.5
+eps <- 1e-6            # to avoid divide-by-zero if min pO2 hits 0
+singleton_as_one <- TRUE  # if only one O2-limited cell at a T, return 1 (else NA)
+
+# -----------------------------
+# 0) Slice feeding_level = 0.6 (exact if present; else nearest)
+# -----------------------------
+has_exact <- any(abs(surf_F_TpO2space$f_ref - f_target) < 1e-9, na.rm = TRUE)
+surf_slice <- if (has_exact) {
+  surf_F_TpO2space %>% filter(abs(f_ref - f_target) < 1e-9)
+} else {
+  f_near <- surf_F_TpO2space %>%
+    summarize(f_near = f_ref[which.min(abs(f_ref - f_target))]) %>% pull(f_near)
+  message(sprintf("Note: f_ref=%.2f not found; using nearest f_ref=%.2f", f_target, f_near))
+  surf_F_TpO2space %>% filter(f_ref == f_near)
+}
+
+# Ensure regime labels exist in surf_slice (you already called add_regime_labels upstream)
+
+# -----------------------------
+# 1) Compute min/max oxygen-limited pO2 and the ratio per (mass, T)
+# -----------------------------
+ratio_df <- surf_slice %>%
+  select(mass, T, pO2, regime) %>%
+  group_by(mass, T) %>%
+  summarize(
+    n_oxlim = sum(regime == "Oxygen limited", na.rm = TRUE),
+    pO2_min = if (n_oxlim > 0) min(pO2[regime == "Oxygen limited"], na.rm = TRUE) else NA_real_,
+    pO2_max = if (n_oxlim > 0) max(pO2[regime == "Oxygen limited"], na.rm = TRUE) else NA_real_,
+    .groups = "drop_last"
+  ) %>%
+  ungroup() %>%
+  mutate(
+    ratio_raw = ifelse(n_oxlim == 0, NA_real_,
+                       ifelse(n_oxlim == 1 & singleton_as_one, 1, (pO2_max + eps) / (pO2_min + eps))),
+    ratio = ratio_raw
+  )
+
+# Pretty mass labels
+mass_lab <- function(m) ifelse(m >= 1000, paste0(signif(m/1000, 3), " kg"),
+                               paste0(signif(m, 3), " g"))
+ratio_df <- ratio_df %>%
+  mutate(mass_lab = factor(mass_lab(mass),
+                           levels = unique(mass_lab(sort(unique(mass))))))
+
+# -----------------------------
+# 2A) Plot: ratio vs Temperature (one line per mass)
+# -----------------------------
+p_ratio_lines <-
+  ggplot(ratio_df, aes(x = T, y = ratio, color = mass_lab)) +
+  geom_line(linewidth = 1) +
+  # scale_y_log10(breaks = c(1, 2, 5, 10),
+  #               labels = c("1", "2", "5", "10"),
+  #               minor_breaks = NULL) +
+  labs(x = "Temperature (°C)",
+       y = "max(pO₂) / min(pO₂) in O₂-limited band",
+       color = "Mass",
+       title = "Oxygen-limited pO₂ span (ratio) vs temperature",
+       subtitle = sprintf("feeding_level = %.2f; %s for single-cell spans",
+                          f_target,
+                          ifelse(singleton_as_one, "ratio=1", "ratio=NA"))) +
+  theme_minimal(base_size = 12)
+
+p_ratio_lines
+
+# -----------------------------
+# 2B) Optional heatmap: T × Mass with ratio as fill
+# -----------------------------
+p_ratio_heat <-
+  ratio_df %>%
+  mutate(mass_f = factor(mass_lab)) %>%
+  ggplot(aes(x = T, y = mass_f, fill = ratio)) +
+  geom_tile() +
+  scale_fill_viridis_c(#trans = "log10",
+                       #breaks = c(1, 2, 5, 10),
+                       na.value = "grey85",
+                       name = "max/min\n(pO₂)") +
+  labs(x = "Temperature (°C)", y = "Mass",
+       title = "Relative span of O₂-limited regime (pO₂ max/min)",
+       subtitle = sprintf("feeding_level = %.2f", f_target)) +
+  theme_minimal(base_size = 12)
+
+# print if desired
+p_ratio_heat
+```
+
+
