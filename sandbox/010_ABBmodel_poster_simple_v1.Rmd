@@ -40,10 +40,17 @@ make_alloc <- function(scen_tbl, fname){
              `Basal metabolism`=st$M_m,`Active metabolism`=st$M_act,SDA=st$D_SDA,Excretion=st$M_exc,`Available energy`=st$E_net)
     })
   })
-  al <- alloc_state %>% pivot_longer(cols=c("Basal metabolism","Active metabolism","SDA","Excretion","Available energy"), names_to="Process", values_to="value") %>% mutate(value_norm=value/Cmax)
-  fg <- alloc_state %>% select(scenario,mass,f,g) %>% pivot_longer(cols=c(f,g), names_to="Limiter", values_to="value")
+  process_levels <- c("Basal metabolism", "Active metabolism", "SDA", "Excretion", "Available energy")
+  al <- alloc_state %>%
+    pivot_longer(cols=all_of(process_levels), names_to="Process", values_to="value") %>%
+    mutate(value_norm=value/Cmax, Process=factor(Process, levels=process_levels)) %>%
+    arrange(scenario, mass, Process)
+  fg <- alloc_state %>%
+    select(scenario,mass,f,g) %>%
+    pivot_longer(cols=c(g,f), names_to="Limiter", values_to="value") %>%
+    mutate(Limiter=factor(Limiter, levels=c("f","g")))
   p <- ggplot() +
-    geom_area(data=al, aes(mass,value_norm, fill=Process, group=Process), position="stack", color="gray50", linewidth=0.2) +
+    geom_area(data=al, aes(mass,value_norm, fill=Process, group=Process), position="stack", color="gray50", linewidth=0.25) +
     geom_line(data=fg, aes(mass,value,colour=Limiter,linetype=Limiter,group=Limiter), linewidth=0.8) +
     scale_fill_manual(values=alloc_cols) +
     scale_colour_manual(values=c(f="#238b45", g="#6a51a3")) +
@@ -121,7 +128,7 @@ ggsave(file.path(out_dir,"diag_oxygen_tension.png"), p2, width=4, height=4, dpi=
 p3 <- plot_surface_masked(d_test_none, x="f_ref", y="pO2", z="U_opt", palette="viridis", x_limits=c(0,1), y_limits=c(0,30), mask_df=d_test_none, contours=contour_spec(z="U_opt", bins=5, linewidth=0.55, linetype="dashed"), theme=th) + labs(x="Prey index", y=axis_lab_O2) + theme(legend.position="none")
 ggsave(file.path(out_dir,"diag_cruising_speed.png"), p3, width=4, height=4, dpi=300)
 
-p4 <- plot_fg_bivariate(d_test, x="f_ref", y="pO2", x_limits=c(0,1), y_limits=c(0,30), contour_fg_mult=FALSE, theme=th) + labs(x="Prey index", y=axis_lab_O2) + theme(legend.position="none")
+p4 <- plot_fg_bivariate(d_test, x="f_ref", y="pO2", x_limits=c(0,1), y_limits=c(0,30), contour_fg_mult=TRUE, theme=th) + labs(x="Prey index", y=axis_lab_O2) + theme(legend.position="none")
 ggsave(file.path(out_dir,"diag_fg_bivariate.png"), p4, width=4, height=4, dpi=300)
 
 key_df <- expand.grid(f=seq(0,1,length.out=200), g=seq(0,1,length.out=200))
