@@ -106,7 +106,7 @@ p_occ
 # follow ABBmodel_test pattern: compute, optional interpolation, plot_surface_masked
 
 d_comp <- compute_state_surface(tr, masses = c(1e1, 1e5), Tseq = seq(0,30,by=0.1), pO2seq = seq(0,30,by=0.1),
-                                   preys = 0.75, prey_units = "prey_index", pair_mode = "cross", progress = TRUE %>%
+                                   preys = 0.75, prey_units = "prey_index", pair_mode = "cross", progress = TRUE) %>%
   add_masks() %>%
   mutate(
     mass_lab = factor(mass, levels = c(1e1, 1e5),
