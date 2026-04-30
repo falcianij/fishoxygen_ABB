@@ -94,45 +94,84 @@ p_occ
 ```
 
 ```{r available-energy-and-diagnostics, message=FALSE, warning=FALSE}
-d_pt <- compute_state_surface(tr, masses=masses, Tseq=Tseq, pO2seq=pO2seq, preys=0.75, prey_units="prey_index", pair_mode="cross", progress=TRUE) %>% add_masks() %>% mutate(mass_lab=factor(mass, levels=masses, labels=c("w == 10^1~g","w == 10^5~g")))
-d_pt_ip <- interp_surface(d_pt, x="T", y="pO2", z="E_net_norm", facet_cols = c("mass_lab"), nx=320, ny=320)
-p_en <- plot_surface_masked(d_pt_ip, x="T", y="pO2", z="E_net_norm", palette="blue", fill_title="Available energy", x_limits=c(0,30), y_limits=c(0,30), mask_df=d_pt, smooth_mask=TRUE, mask_nx=320, mask_ny=320, contours=list(contour_spec(z="f", breaks=seq(0,1,0.2), colour="#238b45", linetype="dashed", linewidth=0.55), contour_spec(z="g", breaks=seq(0,1,0.2), colour="#6a51a3", linetype="dashed", linewidth=0.55)), theme=th) + facet_grid(.~mass_lab, labeller=label_parsed) + labs(x=axis_lab_T,y=axis_lab_O2)
+# follow ABBmodel_test pattern: compute, optional interpolation, plot_surface_masked
+
+d_pt <- compute_state_surface(
+  tr, masses=masses, Tseq=Tseq, pO2seq=pO2seq,
+  preys=0.75, prey_units="prey_index",
+  pair_mode="cross", progress=TRUE
+) %>%
+  add_masks() %>%
+  mutate(mass_lab=factor(mass, levels=masses, labels=c("w == 10^1~g","w == 10^5~g")))
+
+d_pt_ip <- interp_surface(d_pt, x="T", y="pO2", z="E_net_norm", facet_cols=c("mass_lab"), nx=320, ny=320)
+
+p_en <- plot_surface_masked(
+  d_pt_ip, x="T", y="pO2", z="E_net_norm",
+  palette="blue", fill_title="Available energy",
+  x_limits=c(0,30), y_limits=c(0,30),
+  mask_df=d_pt, smooth_mask=TRUE, mask_nx=320, mask_ny=320,
+  contours=list(
+    contour_spec(z="f", breaks=seq(0,1,0.2), colour="#238b45", linetype="dashed", linewidth=0.55),
+    contour_spec(z="g", breaks=seq(0,1,0.2), colour="#6a51a3", linetype="dashed", linewidth=0.55)
+  ),
+  theme=th
+) +
+  facet_grid(.~mass_lab, labeller=label_parsed) +
+  labs(x=axis_lab_T, y=axis_lab_O2)
 ggsave(file.path(out_dir,"available_energy_T_pO2_two_sizes.png"), p_en, width=8, height=4, dpi=300)
 p_en
 
-# pO2 vs prey diagnostics at large fish
- d_test <- compute_state_surface(tr, masses=1e5, Tseq=10, pO2seq=pO2seq, preys=prey_seq, prey_units="prey_index", pair_mode="cross", progress=TRUE) %>% add_masks()
+# pO2 vs prey diagnostics at large fish (ABBmodel_test style + requested exclusion toggles)
+d_test <- compute_state_surface(
+  tr, masses=1e5, Tseq=10, pO2seq=pO2seq,
+  preys=prey_seq, prey_units="prey_index",
+  pair_mode="cross", progress=TRUE
+) %>% add_masks()
 
-d_test_eonly <- d_test %>% mutate(excl_o2 = FALSE)
-d_test_o2only <- d_test %>% mutate(excl_e = FALSE)
-d_test_none <- d_test %>% mutate(excl_o2 = FALSE, excl_e = FALSE)
+d_test_eonly <- d_test %>% mutate(excl_o2 = FALSE)            # energetic-only overlay
+d_test_o2only <- d_test %>% mutate(excl_e = FALSE)            # oxygen-only overlay
+d_test_none  <- d_test %>% mutate(excl_o2 = FALSE, excl_e=FALSE) # no overlay
 
-p1 <- ggplot() +
-  geom_raster(data=d_test_eonly %>% filter(!excl_e, is.finite(E_net_norm)), aes(f_ref, pO2, fill=E_net_norm), interpolate=TRUE) +
-  geom_raster(data=d_test_eonly %>% filter(excl_e), aes(f_ref, pO2), fill="grey70", interpolate=TRUE) +
-  geom_contour(data=d_test_eonly %>% filter(!excl_e, is.finite(E_net_norm)), aes(f_ref, pO2, z=E_net_norm), bins=5, linewidth=0.55, linetype="dashed", colour="black", alpha=0.8) +
-  scale_fill_gradient(low="white", high="#67A5CA") +
-  scale_x_continuous(limits=c(0,1), expand=c(0,0)) + scale_y_continuous(limits=c(0,30), expand=c(0,0)) +
-  labs(x="Prey index", y=axis_lab_O2) + th + theme(legend.position="none")
+p1 <- plot_surface_masked(
+  d_test_eonly, x="f_ref", y="pO2", z="E_net_norm",
+  palette="blue", fill_title="Available energy",
+  x_limits=c(0,1), y_limits=c(0,30),
+  mask_df=d_test_eonly, smooth_mask=TRUE, mask_nx=320, mask_ny=320,
+  contours=contour_spec(z="E_net_norm", bins=5, linewidth=0.55, linetype="dashed"),
+  theme=th
+) + labs(x="Prey index", y=axis_lab_O2) + theme(legend.position="none")
 ggsave(file.path(out_dir,"diag_available_energy.png"), p1, width=4, height=4, dpi=300)
 
-p2 <- ggplot() +
-  geom_raster(data=d_test_o2only %>% filter(!excl_o2, is.finite(pO2_int)), aes(f_ref, pO2, fill=pO2_int), interpolate=TRUE) +
-  geom_raster(data=d_test_o2only %>% filter(excl_o2), aes(f_ref, pO2), fill="black", interpolate=TRUE) +
-  geom_contour(data=d_test_o2only %>% filter(!excl_o2, is.finite(pO2_int)), aes(f_ref, pO2, z=pO2_int), bins=5, linewidth=0.55, linetype="dashed", colour="black", alpha=0.8) +
-  scale_fill_gradient(high="white", low="#6a51a3") +
-  scale_x_continuous(limits=c(0,1), expand=c(0,0)) + scale_y_continuous(limits=c(0,30), expand=c(0,0)) +
-  labs(x="Prey index", y=axis_lab_O2) + th + theme(legend.position="none")
+p2 <- plot_surface_masked(
+  d_test_o2only, x="f_ref", y="pO2", z="pO2_int",
+  palette="purple", fill_title="Interior oxygen",
+  x_limits=c(0,1), y_limits=c(0,30),
+  mask_df=d_test_o2only, smooth_mask=TRUE, mask_nx=320, mask_ny=320,
+  contours=contour_spec(z="pO2_int", breaks=seq(0,30,5), linewidth=0.55, linetype="dashed"),
+  theme=th
+) + labs(x="Prey index", y=axis_lab_O2) + theme(legend.position="none")
 ggsave(file.path(out_dir,"diag_oxygen_tension.png"), p2, width=4, height=4, dpi=300)
 
-p3 <- plot_surface_masked(d_test_none, x="f_ref", y="pO2", z="U_opt", palette="viridis", x_limits=c(0,1), y_limits=c(0,30), mask_df=d_test_none, contours=contour_spec(z="U_opt", bins=5, linewidth=0.55, linetype="dashed"), theme=th) + labs(x="Prey index", y=axis_lab_O2) + theme(legend.position="none")
+p3 <- plot_surface_masked(
+  d_test_none, x="f_ref", y="pO2", z="U_opt",
+  palette="viridis", fill_title="U (m/s)",
+  x_limits=c(0,1), y_limits=c(0,30),
+  mask_df=d_test_none,
+  contours=contour_spec(z="U_opt", bins=5, linewidth=0.55, linetype="dashed"),
+  theme=th
+) + labs(x="Prey index", y=axis_lab_O2) + theme(legend.position="none")
 ggsave(file.path(out_dir,"diag_cruising_speed.png"), p3, width=4, height=4, dpi=300)
 
-p4 <- plot_fg_bivariate(d_test, x="f_ref", y="pO2", x_limits=c(0,1), y_limits=c(0,30), contour_fg_mult=TRUE, theme=th) + labs(x="Prey index", y=axis_lab_O2) + theme(legend.position="none")
+p4 <- plot_fg_bivariate(d_test, x="f_ref", y="pO2", x_limits=c(0,1), y_limits=c(0,30), contour_fg_mult=TRUE, theme=th) +
+  labs(x="Prey index", y=axis_lab_O2) + theme(legend.position="none")
 ggsave(file.path(out_dir,"diag_fg_bivariate.png"), p4, width=4, height=4, dpi=300)
 
 key_df <- expand.grid(f=seq(0,1,length.out=200), g=seq(0,1,length.out=200))
-key_p <- ggplot(key_df, aes(f,g, fill=f*g)) + geom_raster() + scale_fill_gradient(low="white", high="#182B49") + th + labs(x="f", y="g")
+key_p <- ggplot(key_df, aes(f,g, fill=f*g)) +
+  geom_raster() +
+  scale_fill_gradient(low="white", high="#182B49") +
+  th + labs(x="f", y="g")
 ggsave(file.path(out_dir,"diag_fg_bivariate_key.png"), key_p, width=4, height=4, dpi=300)
 ```
 
