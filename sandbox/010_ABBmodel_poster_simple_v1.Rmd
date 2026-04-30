@@ -60,7 +60,7 @@ make_alloc <- function(scen_tbl, fname){
     mutate(Limiter=factor(Limiter, levels=c("f","g")))
   p <- ggplot() +
     geom_area(data=al, aes(mass,value_norm, fill=Process, group=Process), position="stack", color="gray50", linewidth=0.25) +
-    geom_line(data=fg, aes(mass,value,colour=Limiter,linetype=Limiter,group=Limiter), linewidth=0.8) +
+    geom_line(data=fg, aes(mass,value,colour=Limiter,linetype=Limiter,group=Limiter), linewidth=1.2) +
     scale_fill_manual(values=alloc_cols) +
     scale_colour_manual(values=c(f="#238b45", g="#6a51a3")) +
     scale_linetype_manual(values=c(f="dashed", g="dashed")) +
@@ -72,7 +72,7 @@ make_alloc <- function(scen_tbl, fname){
       expand = c(0, 0)
     ) +
     labs(x="Body mass, w (g)", y=expression("Allocation / " * C[max]), fill=NULL, colour=NULL, linetype=NULL) + th
-  ggsave(file.path(out_dir, fname), p, width=16, height=8, dpi=300)
+  ggsave(file.path(out_dir, fname), p, width=14, height=8, dpi=300)
   p
 }
 
@@ -116,8 +116,8 @@ d_comp <- compute_state_surface(tr, masses = c(1e1, 1e5), Tseq = seq(0,30,by=0.1
 p_en <- plot_surface_masked(d_comp, x = "T", y = "pO2", z = "E_net_norm", palette = "blue",
                     fill_title = "Available energy", x_limits = c(0,30), y_limits = c(0,30),
                     contours = list(
-                      contour_spec(z = "f", breaks = seq(0.2,1,0.2), colour = "#238b45", linewidth = 0.55, linetype = "dashed"),
-                      contour_spec(z = "g", breaks = seq(0.2,1,0.2), colour = "#6a51a3", linewidth = 0.55, linetype = "dashed")
+                      contour_spec(z = "f", breaks = seq(0.2,1,0.2), colour = "#238b45", linewidth = 1.2, linetype = "dashed"),
+                      contour_spec(z = "g", breaks = seq(0.2,1,0.2), colour = "#6a51a3", linewidth = 1.2, linetype = "dashed")
                     ),
                     contour_data = d_comp,
                     theme = th) +
@@ -125,7 +125,7 @@ p_en <- plot_surface_masked(d_comp, x = "T", y = "pO2", z = "E_net_norm", palett
   scale_x_continuous(breaks = c(0,10,20,30), limits = c(0,30), expand = c(0,0)) +
   scale_y_continuous(breaks = c(0,10,20,30), limits = c(0,30), expand = c(0,0)) +
   labs(x = "Temperature, T (°C)", y = expression("Ambient oxygen, " * p[O[2]*","*env] * " (kPa)"))
-ggsave(file.path(out_dir,"available_energy_T_pO2_two_sizes.png"), p_en, width=8, height=4, dpi=300)
+ggsave(file.path(out_dir,"available_energy_T_pO2_two_sizes.png"), p_en, width=8, height=8, dpi=300)
 p_en
 
 # pO2 vs prey diagnostics at large fish (ABBmodel_test style + requested exclusion toggles)
@@ -147,7 +147,7 @@ p1 <- plot_surface_masked(
   contours=contour_spec(z="E_net_norm", bins=5, linewidth=0.55, linetype="dashed"),
   theme=th
 ) + labs(x="Prey index", y=axis_lab_O2) + theme(legend.position="none")
-ggsave(file.path(out_dir,"diag_available_energy.png"), p1, width=4, height=4, dpi=300)
+ggsave(file.path(out_dir,"diag_available_energy.png"), p1, width=4, height=5, dpi=300)
 
 p2 <- plot_surface_masked(
   d_test_o2only, x="f_ref", y="pO2", z="pO2_int",
@@ -157,7 +157,7 @@ p2 <- plot_surface_masked(
   contours=contour_spec(z="pO2_int", breaks=seq(0,30,5), linewidth=0.55, linetype="dashed"),
   theme=th
 ) + labs(x="Prey index", y=axis_lab_O2) + theme(legend.position="none")
-ggsave(file.path(out_dir,"diag_oxygen_tension.png"), p2, width=4, height=4, dpi=300)
+ggsave(file.path(out_dir,"diag_oxygen_tension.png"), p2, width=4, height=5, dpi=300)
 
 p3 <- plot_surface_masked(
   d_test_none, x="f_ref", y="pO2", z="U_opt",
@@ -167,11 +167,11 @@ p3 <- plot_surface_masked(
   contours=contour_spec(z="U_opt", bins=5, linewidth=0.55, linetype="dashed"),
   theme=th
 ) + labs(x="Prey index", y=axis_lab_O2) + theme(legend.position="none")
-ggsave(file.path(out_dir,"diag_cruising_speed.png"), p3, width=4, height=4, dpi=300)
+ggsave(file.path(out_dir,"diag_cruising_speed.png"), p3, width=4, height=5, dpi=300)
 
 p4 <- plot_fg_bivariate(d_test, x="f_ref", y="pO2", x_limits=c(0,1), y_limits=c(0,30), contour_fg_mult=TRUE, theme=th) +
   labs(x="Prey index", y=axis_lab_O2) + theme(legend.position="none")
-ggsave(file.path(out_dir,"diag_fg_bivariate.png"), p4, width=4, height=4, dpi=300)
+ggsave(file.path(out_dir,"diag_fg_bivariate.png"), p4, width=4, height=5, dpi=300)
 
 key_df <- expand.grid(f=seq(0,1,length.out=200), g=seq(0,1,length.out=200))
 key_p <- ggplot(key_df, aes(f,g, fill=f*g)) +
@@ -190,16 +190,16 @@ lines_T <- compute_state_surface(
   tr,
   masses = masses,
   Tseq = seq(0, 30, by = 0.1),
-  pO2seq = 25,
+  pO2seq = 20,
   preys = c(0.5, 0.75),
-  prey_units = "feeding_level",
+  prey_units = "prey_index",
   pair_mode = "cross",
   progress = TRUE
 ) %>%
   add_masks() %>%
   mutate(
     mass_lab = factor(mass, levels = masses, labels = mass_labs),
-    lw = if_else(f_ref == 0.75, 1.2, 0.6)
+    lw = if_else(f_ref == 0.75, 2, 1)
   ) %>%
   select(mass_lab, f_ref, lw, T, E_net_norm, f, g) %>%
   pivot_longer(cols = c(E_net_norm, f, g), names_to = "var", values_to = "val")
@@ -215,7 +215,7 @@ p_temp <- ggplot(lines_T, aes(x = T, y = val, color = var, linetype = var, linew
   labs(x = axis_lab_T, y = expression("Allocation / " * C[max]), color = NULL, linetype = NULL) +
   th
 
-ggsave(file.path(out_dir, "temperature_limitation_two_sizes.png"), p_temp, width = 7, height = 3.5, dpi = 300)
+ggsave(file.path(out_dir, "temperature_limitation_two_sizes.png"), p_temp, width = 7, height = 6, dpi = 300)
 p_temp
 
 # Oxygen cross-sections at fixed T = 10 C
@@ -232,7 +232,7 @@ lines_O2 <- compute_state_surface(
   add_masks() %>%
   mutate(
     mass_lab = factor(mass, levels = masses, labels = mass_labs),
-    lw = if_else(f_ref == 0.75, 1.2, 0.6)
+    lw = if_else(f_ref == 0.75, 2, 1)
   ) %>%
   select(mass_lab, f_ref, lw, pO2, E_net_norm, f, g) %>%
   pivot_longer(cols = c(E_net_norm, f, g), names_to = "var", values_to = "val")
@@ -248,6 +248,6 @@ p_o2 <- ggplot(lines_O2, aes(x = pO2, y = val, color = var, linetype = var, line
   labs(x = axis_lab_O2, y = expression("Allocation / " * C[max]), color = NULL, linetype = NULL) +
   th
 
-ggsave(file.path(out_dir, "oxygen_limitation_two_sizes.png"), p_o2, width = 7, height = 3.5, dpi = 300)
+ggsave(file.path(out_dir, "oxygen_limitation_two_sizes.png"), p_o2, width = 7, height = 6, dpi = 300)
 p_o2
 ```
