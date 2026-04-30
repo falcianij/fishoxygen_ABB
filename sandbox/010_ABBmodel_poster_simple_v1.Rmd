@@ -97,7 +97,7 @@ p_occ
 # follow ABBmodel_test pattern: compute, optional interpolation, plot_surface_masked
 
 d_comp <- compute_state_surface(tr, masses = c(1e1, 1e5), Tseq = seq(0,30,by=0.1), pO2seq = seq(0,30,by=0.1),
-                                   preys = 0.75, prey_units = "feeding_level", pair_mode = "cross", progress = TRUE) %>%
+                                   preys = 0.75, prey_units = "prey_index", pair_mode = "cross", progress = TRUE %>%
   add_masks() %>%
   mutate(
     mass_lab = factor(mass, levels = c(1e1, 1e5),
@@ -173,18 +173,72 @@ ggsave(file.path(out_dir,"diag_fg_bivariate_key.png"), key_p, width=4, height=4,
 ```
 
 ```{r temp-and-o2-limitation, message=FALSE, warning=FALSE}
-make_lim_plot <- function(xvar=c("T","pO2")){
-  xvar <- match.arg(xvar)
-  xseq <- if (xvar=="T") seq(0,30,by=0.2) else seq(0,30,by=0.2)
-  dat <- tidyr::crossing(mass=masses, fl=c(0.5,0.75), x=xseq) %>%
-    mutate(T=ifelse(xvar=="T", x, 10), pO2=ifelse(xvar=="pO2", x, 25)) %>%
-    rowwise() %>% mutate(B=B_from_f(fl, w=mass, tr=tr, T_ref=10, pO2_ref=25, U_lo=1e-5, U_mech=5, enforce_O2_feasible=TRUE), st=list(tryCatch(find_U_opt(pO2_env=pO2, T=T, w=mass, prey=B, tr=tr, U_lo=1e-5, U_mech=5), error=function(e) NULL))) %>% ungroup() %>% mutate(E_net_norm=purrr::map_dbl(st, ~ if(is.null(.x) || length(.x$E_net_norm)==0) NA_real_ else .x$E_net_norm), f=purrr::map_dbl(st, ~ if(is.null(.x) || length(.x$f)==0) NA_real_ else .x$f), g=purrr::map_dbl(st, ~ if(is.null(.x) || length(.x$g)==0) NA_real_ else .x$g), mass_lab=factor(mass, levels=masses, labels=c("w == 10^1~g","w == 10^5~g")), lw=if_else(fl==0.75,1.2,0.6))
-  long <- dat %>% select(mass_lab, fl, lw, x, E_net_norm, f, g) %>% pivot_longer(cols=c(E_net_norm,f,g), names_to="var", values_to="val")
-  p <- ggplot(long, aes(x=x, y=val, color=var, linetype=var, linewidth=lw, group=interaction(fl,var))) + geom_line() +
-    scale_color_manual(values=c(E_net_norm="#67A5CA", f="#238b45", g="#6a51a3"), labels=c(E_net_norm="Available energy",f="f",g="g")) +
-    scale_linetype_manual(values=c(E_net_norm="solid", f="dashed", g="dashed")) + scale_linewidth_identity() + facet_grid(.~mass_lab, labeller=label_parsed) + scale_y_continuous(limits=c(0,1), expand=c(0,0)) + labs(x=ifelse(xvar=="T", axis_lab_T, axis_lab_O2), y=expression("Allocation / " * C[max]), color=NULL, linetype=NULL) + th
-  p
-}
-pt <- make_lim_plot("T"); ggsave(file.path(out_dir,"temperature_limitation_two_sizes.png"), pt, width=7, height=3.5, dpi=300); pt
-po <- make_lim_plot("pO2"); ggsave(file.path(out_dir,"oxygen_limitation_two_sizes.png"), po, width=7, height=3.5, dpi=300); po
+# Cross-sections sampled directly from state surfaces
+mass_labs <- c("w == 10^1~g", "w == 10^5~g")
+
+# Temperature cross-sections at fixed pO2 = 25 kPa
+lines_T <- compute_state_surface(
+  tr,
+  masses = masses,
+  Tseq = seq(0, 30, by = 0.1),
+  pO2seq = 25,
+  preys = c(0.5, 0.75),
+  prey_units = "feeding_level",
+  pair_mode = "cross",
+  progress = TRUE
+) %>%
+  add_masks() %>%
+  mutate(
+    mass_lab = factor(mass, levels = masses, labels = mass_labs),
+    lw = if_else(f_ref == 0.75, 1.2, 0.6)
+  ) %>%
+  select(mass_lab, f_ref, lw, T, E_net_norm, f, g) %>%
+  pivot_longer(cols = c(E_net_norm, f, g), names_to = "var", values_to = "val")
+
+p_temp <- ggplot(lines_T, aes(x = T, y = val, color = var, linetype = var, linewidth = lw, group = interaction(f_ref, var))) +
+  geom_line() +
+  scale_color_manual(values = c(E_net_norm = "#67A5CA", f = "#238b45", g = "#6a51a3"), labels = c(E_net_norm = "Available energy", f = "f", g = "g")) +
+  scale_linetype_manual(values = c(E_net_norm = "solid", f = "dashed", g = "dashed")) +
+  scale_linewidth_identity() +
+  facet_grid2(. ~ mass_lab, labeller = labeller(mass_lab = label_parsed)) +
+  scale_x_continuous(breaks = c(0, 10, 20, 30), limits = c(0, 30), expand = c(0, 0)) +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1), expand = c(0, 0)) +
+  labs(x = axis_lab_T, y = expression("Allocation / " * C[max]), color = NULL, linetype = NULL) +
+  th
+
+ggsave(file.path(out_dir, "temperature_limitation_two_sizes.png"), p_temp, width = 7, height = 3.5, dpi = 300)
+p_temp
+
+# Oxygen cross-sections at fixed T = 10 C
+lines_O2 <- compute_state_surface(
+  tr,
+  masses = masses,
+  Tseq = 10,
+  pO2seq = seq(0, 30, by = 0.1),
+  preys = c(0.5, 0.75),
+  prey_units = "feeding_level",
+  pair_mode = "cross",
+  progress = TRUE
+) %>%
+  add_masks() %>%
+  mutate(
+    mass_lab = factor(mass, levels = masses, labels = mass_labs),
+    lw = if_else(f_ref == 0.75, 1.2, 0.6)
+  ) %>%
+  select(mass_lab, f_ref, lw, pO2, E_net_norm, f, g) %>%
+  pivot_longer(cols = c(E_net_norm, f, g), names_to = "var", values_to = "val")
+
+p_o2 <- ggplot(lines_O2, aes(x = pO2, y = val, color = var, linetype = var, linewidth = lw, group = interaction(f_ref, var))) +
+  geom_line() +
+  scale_color_manual(values = c(E_net_norm = "#67A5CA", f = "#238b45", g = "#6a51a3"), labels = c(E_net_norm = "Available energy", f = "f", g = "g")) +
+  scale_linetype_manual(values = c(E_net_norm = "solid", f = "dashed", g = "dashed")) +
+  scale_linewidth_identity() +
+  facet_grid2(. ~ mass_lab, labeller = labeller(mass_lab = label_parsed)) +
+  scale_x_continuous(breaks = c(0, 10, 20, 30), limits = c(0, 30), expand = c(0, 0)) +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1), expand = c(0, 0)) +
+  labs(x = axis_lab_O2, y = expression("Allocation / " * C[max]), color = NULL, linetype = NULL) +
+  th
+
+ggsave(file.path(out_dir, "oxygen_limitation_two_sizes.png"), p_o2, width = 7, height = 3.5, dpi = 300)
+p_o2
 ```
