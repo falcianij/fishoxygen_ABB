@@ -96,30 +96,35 @@ p_occ
 ```{r available-energy-and-diagnostics, message=FALSE, warning=FALSE}
 # follow ABBmodel_test pattern: compute, optional interpolation, plot_surface_masked
 
-d_pt <- compute_state_surface(
-  tr, masses=masses, Tseq=Tseq, pO2seq=pO2seq,
-  preys=0.75, prey_units="prey_index",
-  pair_mode="cross", progress=TRUE
+d_comp_pi <- compute_state_surface(tr, masses = c(1e1, 1e5), Tseq = seq(0,30,by=0.25), pO2seq = pO2seq,
+                                   preys = 0.75, prey_units = "prey_index", pair_mode = "cross", progress = TRUE)
+d_comp_fl <- compute_state_surface(tr, masses = c(1e1, 1e5), Tseq = seq(0,30,by=0.25), pO2seq = pO2seq,
+                                   preys = 0.75, prey_units = "feeding_level", pair_mode = "cross", progress = TRUE)
+
+d_comp <- bind_rows(
+  d_comp_pi %>% mutate(row_lab = "Prey index = 0.75"),
+  d_comp_fl %>% mutate(row_lab = "feeding level = 0.75")
 ) %>%
   add_masks() %>%
-  mutate(mass_lab=factor(mass, levels=masses, labels=c("w == 10^1~g","w == 10^5~g")))
+  mutate(
+    mass_lab = factor(mass, levels = c(1e1, 1e5),
+                    labels = c("w == 10^1~g", "w == 10^5~g")),
+    row_lab = factor(row_lab, levels = c("Prey index = 0.75", "feeding level = 0.75"))
+  )
 
-d_pt_ip <- interp_surface(d_pt, x="T", y="pO2", z="E_net_norm", facet_cols=c("mass_lab"), nx=320, ny=320)
-
-p_en <- plot_surface_masked(
-  d_pt_ip, x="T", y="pO2", z="E_net_norm",
-  palette="blue", fill_title="Available energy",
-  x_limits=c(0,30), y_limits=c(0,30),
-  mask_df=d_pt, smooth_mask=TRUE, mask_nx=320, mask_ny=320,
-  contours=list(
-    contour_spec(z="f", breaks=seq(0,1,0.2), colour="#238b45", linetype="dashed", linewidth=0.55),
-    contour_spec(z="g", breaks=seq(0,1,0.2), colour="#6a51a3", linetype="dashed", linewidth=0.55)
-  ),
-  theme=th
-) +
-  facet_grid(.~mass_lab, labeller=label_parsed) +
-  labs(x=axis_lab_T, y=axis_lab_O2)
-ggsave(file.path(out_dir,"available_energy_T_pO2_two_sizes.png"), p_en, width=8, height=4, dpi=300)
+p_en <- plot_surface_masked(d_comp, x = "T", y = "pO2", z = "E_net_norm", palette = "blue",
+                    fill_title = "Available energy", x_limits = c(0,30), y_limits = c(0,30),
+                    contours = list(
+                      contour_spec(z = "f", breaks = seq(0.2,1,0.2), colour = "#238b45", linewidth = 0.55, linetype = "dashed"),
+                      contour_spec(z = "g", breaks = seq(0.2,1,0.2), colour = "#6a51a3", linewidth = 0.55, linetype = "dashed")
+                    ),
+                    contour_data = d_comp,
+                    theme = th) +
+  facet_grid2(rows = vars(row_lab), cols = vars(mass_lab), labeller = labeller(mass_lab = label_parsed)) +
+  scale_x_continuous(breaks = c(0,10,20,30), limits = c(0,30), expand = c(0,0)) +
+  scale_y_continuous(breaks = c(0,10,20,30), limits = c(0,30), expand = c(0,0)) +
+  labs(x = "Temperature, T (°C)", y = expression("Ambient oxygen, " * p[O[2]*","*env] * " (kPa)"))
+ggsave(file.path(out_dir,"available_energy_T_pO2_two_sizes.png"), p_en, width=10, height=8, dpi=300)
 p_en
 
 # pO2 vs prey diagnostics at large fish (ABBmodel_test style + requested exclusion toggles)
