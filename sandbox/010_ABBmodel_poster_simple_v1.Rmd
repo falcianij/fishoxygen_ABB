@@ -153,7 +153,8 @@ p1 <- plot_surface_masked(d_test, x="f_ref", y="pO2", z="E_net_norm",
                     x_limits=c(0,1), y_limits=c(0,30),
                     contours="auto",
                     theme=th) +
-  labs(x="Prey index", y=axis_lab_O2) + theme(legend.position="none")
+  labs(title="Available energy", x="Prey index", y=expression("Ambient oxygen, " * p[O[2]*","*env] * " (kPa)")) +
+  theme(legend.position="none")
 ggsave(file.path(out_dir,"diag_available_energy.png"), p1, width=4, height=5, dpi=300)
 
 p2 <- plot_surface_masked(
