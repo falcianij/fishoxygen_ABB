@@ -130,23 +130,30 @@ p_en
 
 # pO2 vs prey diagnostics at large fish (ABBmodel_test style + requested exclusion toggles)
 d_test <- compute_state_surface(
-  tr, masses=1e5, Tseq=10, pO2seq=pO2seq,
-  preys=prey_seq, prey_units="prey_index",
-  pair_mode="cross", progress=TRUE
-) %>% add_masks()
+  tr, masses = 1e4, Tseq = 10, pO2seq = pO2seq,
+  preys = seq(0, 1, by = 0.004),
+  prey_units = "prey_index",
+  pair_mode = "cross", progress = TRUE
+) %>%
+  add_masks() %>%
+  mutate(
+    M_m_norm   = M_m / Cmax,
+    M_act_norm = M_act / Cmax,
+    D_SDA_norm = D_SDA / Cmax,
+    M_exc_norm = M_exc / Cmax,
+    A_assim_norm = A_assim / Cmax
+  )
 
 d_test_eonly <- d_test %>% mutate(excl_o2 = FALSE)            # energetic-only overlay
 d_test_o2only <- d_test %>% mutate(excl_e = FALSE)            # oxygen-only overlay
 d_test_none  <- d_test %>% mutate(excl_o2 = FALSE, excl_e=FALSE) # no overlay
 
-p1 <- plot_surface_masked(
-  d_test_eonly, x="f_ref", y="pO2", z="E_net_norm",
-  palette="blue", fill_title="Available energy",
-  x_limits=c(0,1), y_limits=c(0,30),
-  mask_df=d_test_eonly, smooth_mask=TRUE, mask_nx=320, mask_ny=320,
-  contours=contour_spec(z="E_net_norm", bins=5, linewidth=0.55, linetype="dashed"),
-  theme=th
-) + labs(x="Prey index", y=axis_lab_O2) + theme(legend.position="none")
+p1 <- plot_surface_masked(d_test, x="f_ref", y="pO2", z="E_net_norm",
+                    palette="blue", fill_title="Available energy",
+                    x_limits=c(0,1), y_limits=c(0,30),
+                    contours="auto",
+                    theme=th) +
+  labs(x="Prey index", y=axis_lab_O2) + theme(legend.position="none")
 ggsave(file.path(out_dir,"diag_available_energy.png"), p1, width=4, height=5, dpi=300)
 
 p2 <- plot_surface_masked(
