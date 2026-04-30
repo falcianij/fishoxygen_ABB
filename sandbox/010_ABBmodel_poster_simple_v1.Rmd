@@ -11,7 +11,16 @@ library(ggh4x)
 file_sources <- list.files(here("scripts"), pattern = "*.R$", full.names = TRUE)
 invisible(lapply(file_sources, source))
 
-th <- theme_surface_default(base_size = 9, square = TRUE)
+th <- theme_surface_default(base_size = 18, square = TRUE) +
+  theme(
+    axis.text = element_text(size = 18),
+    axis.title = element_text(size = 18),
+    strip.text = element_text(size = 18),
+    legend.title = element_text(size = 18),
+    legend.text = element_text(size = 18),
+    panel.spacing.x = grid::unit(1.5, "lines"),
+    panel.spacing.y = grid::unit(1.2, "lines")
+  )
 out_dir <- here("figs", "poster_simple")
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
