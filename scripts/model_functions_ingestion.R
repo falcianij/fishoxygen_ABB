@@ -157,6 +157,7 @@ solve_pO2_int <- function(U, pO2_env, T, w, prey, tr, u_prey = 0, D = 3) {
       pO2_int = NA_real_, g = NA_real_,
       C_pot = NA_real_, C_real = NA_real_, f = NA_real_,
       Mm = Mm, Ma = Ma, kO = kO, Cmax = NA_real_, Cmax_potential = Cmax_potential, Enc = Enc,
+      A_assim = NA_real_, E_net = NA_real_,
       alpha_assim = NA_real_, D_SDA = NA_real_, M_exc = NA_real_,
       O2_supply = NA_real_, O2_demand = NA_real_, O2_margin = NA_real_
     ))
