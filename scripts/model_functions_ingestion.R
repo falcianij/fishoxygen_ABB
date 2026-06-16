@@ -112,6 +112,18 @@ hill_g <- function(p, K_g, h_g) {
   p_use^h_g / (p_use^h_g + K_g^h_g)
 }
 
+
+processing_state <- function(Enc, Cmax_potential, p_int, K_g, h_g) {
+  g <- hill_g(p_int, K_g = K_g, h_g = h_g)
+  Cmax <- g * Cmax_potential
+  denom <- Enc + Cmax
+
+  f <- if (is.finite(denom) && denom > 0) Enc / denom else 0
+  C_proc <- if (is.finite(denom) && denom > 0) Enc * Cmax / denom else 0
+
+  list(g = g, Cmax = Cmax, f = f, C_proc = C_proc)
+}
+
 kO_whole <- function(T, w, tr) {
   a_O <- get_par(tr, c("a_O", "a_o"), required = TRUE)
 
@@ -141,11 +153,8 @@ solve_pO2_int <- function(U, pO2_env, T, w, prey, tr, u_prey = 0, D = 3) {
   kO <- kO_whole(T, w, tr)
 
   F <- function(p_int) {
-    g <- hill_g(p_int, K_g = K_g, h_g = h_g)
-    Cmax <- g * Cmax_potential
-    f <- if (is.finite(Cmax) && Cmax > 0) Enc / (Enc + Cmax) else NA_real_
-    C_real <- Cmax * f
-    kO * (pO2_env - p_int) - (Mm + Ma + alpha_SDA * C_real)
+    proc <- processing_state(Enc, Cmax_potential, p_int, K_g = K_g, h_g = h_g)
+    kO * (pO2_env - p_int) - (Mm + Ma + alpha_SDA * proc$C_proc)
   }
 
   f0 <- F(0)
@@ -164,11 +173,12 @@ solve_pO2_int <- function(U, pO2_env, T, w, prey, tr, u_prey = 0, D = 3) {
   }
 
   p_int <- if (abs(f0) <= .TOL) 0 else uniroot(F, c(0, pO2_env))$root
-  g <- hill_g(p_int, K_g = K_g, h_g = h_g)
-  Cmax <- g * Cmax_potential
-  f <- if (is.finite(Cmax) && Cmax > 0) Enc / (Enc + Cmax) else NA_real_
-  C_pot <- Cmax * f
-  C_real <- C_pot
+  proc <- processing_state(Enc, Cmax_potential, p_int, K_g = K_g, h_g = h_g)
+  g <- proc$g
+  Cmax <- proc$Cmax
+  f <- proc$f
+  C_pot <- proc$C_proc
+  C_real <- proc$C_proc
 
   alpha_assim <- fr$alpha_assim
   alpha_exc <- fr$alpha_exc

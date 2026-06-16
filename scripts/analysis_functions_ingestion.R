@@ -121,6 +121,13 @@ compute_state_surface <- function(tr,
     on.exit(try(close(pb), silent = TRUE), add = TRUE)
   }
 
+
+  scalar <- function(x) {
+    if (is.null(x) || length(x) == 0) return(NA_real_)
+    x <- x[[1]]
+    if (is.null(x) || length(x) == 0) NA_real_ else as.numeric(x)
+  }
+
   blocks <- vector("list", nrow(spec))
 
   for (i in seq_len(nrow(spec))) {
@@ -166,12 +173,6 @@ compute_state_surface <- function(tr,
 
       st <- find_U_opt(pO2_env = pO2v, T = Tval, w = w, prey = B_used, tr = tr,
                        u_prey = u_prey, D = D, U_lo = U_lo, U_mech = U_mech)
-
-      scalar <- function(x) {
-        if (is.null(x) || length(x) == 0) return(NA_real_)
-        x <- x[[1]]
-        if (is.null(x) || length(x) == 0) NA_real_ else as.numeric(x)
-      }
 
       c(B_used = scalar(B_used), f_ref = scalar(f_ref_out),
         U_opt = scalar(st$U_opt), E_net = scalar(st$E_net), Cmax = scalar(st$Cmax),
