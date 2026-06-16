@@ -104,7 +104,7 @@ Enc_whole <- function(U, T, w, prey, tr, u_prey = 0, D = 3) {
   a_E <- get_par(tr, c("a_E", "a_e"), required = TRUE)
   b_E <- get_par(tr, c("b_E", "b_e"), required = TRUE)
   b_E_eff <- b_E * (D - 1) / 2
-  a_E * w^b_E_eff * v_rel_rms(U, u_prey) * prey / w
+  a_E * w^b_E_eff * v_rel_rms(U^0.2, u_prey) * prey / w
 }
 
 hill_g <- function(p, K_g, h_g) {

@@ -13,6 +13,7 @@ invisible(lapply(file_sources, source))
 
 th <- theme_surface_default(base_size = 18, square = TRUE) +
   theme(
+    text = element_text(family = ""),
     axis.text = element_text(size = 18),
     axis.title = element_text(size = 18),
     strip.text = element_text(size = 18),
@@ -28,8 +29,8 @@ axis_lab_T <- expression("Temperature, " * T * " (" * degree * C * ")")
 axis_lab_O2 <- expression("Ambient oxygen, " * p[O[2]*","*env] * " (kPa)")
 
 tr <- list(a_A=80,b_R=0.78,a_O=5,b_d=0.75,b_v=0.15,K_g=2.0,h_g=2.0,a_E=20,b_E=2/3,a_C=60,b_C=0.75,alpha_M=0.1,b_M=0.75,alpha_SDA=0.2,alpha_exc=0.1,T_ref=10,E_M=0.50,E_C=0.50,E_A=0.10,E_O=0.25)
-pO2seq <- seq(0,30,by=0.2)
-Tseq <- seq(0,30,by=0.2)
+pO2seq <- seq(0,30,by=0.05)
+Tseq <- seq(0,30,by=0.05)
 prey_seq <- seq(0,1,by=0.004)
 masses <- c(1e1, 1e5)
 
@@ -42,7 +43,7 @@ mass_seq <- 10^seq(-3, 5, length.out = 120)
 
 make_alloc <- function(scen_tbl, fname){
   alloc_state <- purrr::pmap_dfr(scen_tbl, function(scenario, T, pO2, f_ref) {
-    B_vec <- B_from_f(f_ref=rep(f_ref,length(mass_seq)), w=mass_seq, tr=tr, T_ref=rep(10,length(mass_seq)), pO2_ref=rep(25,length(mass_seq)), U_lo=1e-5, U_mech=5, enforce_O2_feasible=TRUE)
+    B_vec <- B_from_f(f_ref=rep(f_ref,length(mass_seq)), w=mass_seq, tr=tr, T_ref=rep(10,length(mass_seq)), pO2_ref=rep(20,length(mass_seq)), U_lo=1e-5, U_mech=5, enforce_O2_feasible=TRUE)
     purrr::map2_dfr(mass_seq, B_vec, function(m, B) {
       st <- find_U_opt(pO2_env=pO2, T=T, w=m, prey=B, tr=tr, U_lo=1e-5, U_mech=5)
       tibble(scenario=scenario,mass=m,Cmax=st$Cmax,f=st$f,g=st$g,
@@ -97,10 +98,11 @@ woa <- inner_join(woa_wide_to_long(woa_temp,"temp_C"), woa_wide_to_long(woa_po2,
 
 grid_df <- tidyr::crossing(mass_lab=factor(c("w == 10^1~g","w == 10^5~g"), levels=c("w == 10^1~g","w == 10^5~g")), T_bin=seq(0.5,29.5,1), O2_bin=seq(0.5,29.5,1)) %>% left_join(woa, by=c("T_bin","O2_bin")) %>% left_join(occ, by=c("mass_lab","T_bin","O2_bin")) %>% mutate(rare_woa=if_else(is.na(rare_woa), TRUE, rare_woa))
 
-p_occ <- ggplot() + geom_tile(data=grid_df %>% filter(rare_woa), aes(T_bin,O2_bin), fill="grey82") + geom_tile(data=grid_df %>% filter(!is.na(n), n>0), aes(T_bin,O2_bin,fill=n)) + facet_grid(.~mass_lab, labeller=label_parsed) + scale_fill_gradient(low="#182B49", high="#251A2D", trans="log10") + scale_x_continuous(breaks=c(0,10,20,30), limits=c(0,30), expand=c(0,0)) + scale_y_continuous(breaks=c(0,10,20,30), limits=c(0,30), expand=c(0,0)) + labs(x=axis_lab_T,y=axis_lab_O2, fill="Cells") + th + theme(legend.position="bottom")
-ggsave(file.path(out_dir,"owf_occurrence_two_sizes.png"), p_occ, width=8, height=4, dpi=300)
+p_occ <- ggplot() + geom_tile(data=grid_df %>% filter(rare_woa), aes(T_bin,O2_bin), fill="grey82") + geom_tile(data=grid_df %>% filter(!is.na(n), n>0), aes(T_bin,O2_bin,fill=n)) + facet_grid(.~mass_lab, labeller=label_parsed) + scale_fill_gradient(high="#182B49", low="#5A85CA", trans="log10") + scale_x_continuous(breaks=c(0,10,20,30), limits=c(0,30), expand=c(0,0)) + scale_y_continuous(breaks=c(0,10,20,30), limits=c(0,30), expand=c(0,0)) + labs(x=axis_lab_T,y=axis_lab_O2, fill="Cells") + th + theme(legend.position="bottom")
+ggsave(file.path(out_dir,"owf_occurrence_two_sizes.png"), p_occ, width=8, height=8, dpi=300)
 p_occ
 ```
+
 
 ```{r available-energy-and-diagnostics, message=FALSE, warning=FALSE}
 # follow ABBmodel_test pattern: compute, optional interpolation, plot_surface_masked
@@ -127,34 +129,31 @@ p_en <- plot_surface_masked(d_comp, x = "T", y = "pO2", z = "E_net_norm", palett
   labs(x = "Temperature, T (°C)", y = expression("Ambient oxygen, " * p[O[2]*","*env] * " (kPa)"))
 ggsave(file.path(out_dir,"available_energy_T_pO2_two_sizes.png"), p_en, width=8, height=8, dpi=300)
 p_en
+```
 
+
+```{r available-energy-and-diagnostics, message=FALSE, warning=FALSE}
 # pO2 vs prey diagnostics at large fish (ABBmodel_test style + requested exclusion toggles)
 d_test <- compute_state_surface(
-  tr, masses = 1e4, Tseq = 10, pO2seq = pO2seq,
-  preys = seq(0, 1, by = 0.004),
-  prey_units = "prey_index",
-  pair_mode = "cross", progress = TRUE
-) %>%
-  add_masks() %>%
-  mutate(
-    M_m_norm   = M_m / Cmax,
-    M_act_norm = M_act / Cmax,
-    D_SDA_norm = D_SDA / Cmax,
-    M_exc_norm = M_exc / Cmax,
-    A_assim_norm = A_assim / Cmax
-  )
+  tr, masses=1e5, Tseq=10, pO2seq=pO2seq,
+  preys=prey_seq, prey_units="prey_index",
+  pair_mode="cross", progress=TRUE
+) %>% add_masks()
 
 d_test_eonly <- d_test %>% mutate(excl_o2 = FALSE)            # energetic-only overlay
 d_test_o2only <- d_test %>% mutate(excl_e = FALSE)            # oxygen-only overlay
 d_test_none  <- d_test %>% mutate(excl_o2 = FALSE, excl_e=FALSE) # no overlay
 
-p1 <- plot_surface_masked(d_test, x="f_ref", y="pO2", z="E_net_norm",
-                    palette="blue", fill_title="Available energy",
-                    x_limits=c(0,1), y_limits=c(0,30),
-                    contours="auto",
-                    theme=th) +
-  labs(x="Prey index", y=axis_lab_O2) + theme(legend.position="none")
-ggsave(file.path(out_dir,"diag_available_energy.png"), p1, width=4, height=5, dpi=300)
+p1 <- plot_surface_masked(
+  d_test_eonly, x="f_ref", y="pO2", z="E_net_norm",
+  palette="blue", fill_title="Available energy",
+  x_limits=c(0,1), y_limits=c(0,30),
+  mask_df=d_test_eonly, smooth_mask=FALSE, mask_nx=320, mask_ny=320,
+  contours=contour_spec(z="E_net_norm", bins=5, linewidth=0.55, linetype="dashed"),
+  theme=th
+) + labs(x="Prey index", y=axis_lab_O2) + theme(legend.position="none")
+ggsave(file.path(out_dir,"diag_available_energy.png"), p1, width=5, height=4, dpi=300)
+p1
 
 p2 <- plot_surface_masked(
   d_test_o2only, x="f_ref", y="pO2", z="pO2_int",
@@ -164,7 +163,7 @@ p2 <- plot_surface_masked(
   contours=contour_spec(z="pO2_int", breaks=seq(0,30,5), linewidth=0.55, linetype="dashed"),
   theme=th
 ) + labs(x="Prey index", y=axis_lab_O2) + theme(legend.position="none")
-ggsave(file.path(out_dir,"diag_oxygen_tension.png"), p2, width=4, height=5, dpi=300)
+ggsave(file.path(out_dir,"diag_oxygen_tension.png"), p2, width=5, height=4, dpi=300)
 
 p3 <- plot_surface_masked(
   d_test_none, x="f_ref", y="pO2", z="U_opt",
@@ -174,11 +173,11 @@ p3 <- plot_surface_masked(
   contours=contour_spec(z="U_opt", bins=5, linewidth=0.55, linetype="dashed"),
   theme=th
 ) + labs(x="Prey index", y=axis_lab_O2) + theme(legend.position="none")
-ggsave(file.path(out_dir,"diag_cruising_speed.png"), p3, width=4, height=5, dpi=300)
+ggsave(file.path(out_dir,"diag_cruising_speed.png"), p3, width=5, height=4, dpi=300)
 
 p4 <- plot_fg_bivariate(d_test, x="f_ref", y="pO2", x_limits=c(0,1), y_limits=c(0,30), contour_fg_mult=TRUE, theme=th) +
   labs(x="Prey index", y=axis_lab_O2) + theme(legend.position="none")
-ggsave(file.path(out_dir,"diag_fg_bivariate.png"), p4, width=4, height=5, dpi=300)
+ggsave(file.path(out_dir,"diag_fg_bivariate.png"), p4, width=5, height=4, dpi=300)
 
 key_df <- expand.grid(f=seq(0,1,length.out=200), g=seq(0,1,length.out=200))
 key_p <- ggplot(key_df, aes(f,g, fill=f*g)) +
@@ -186,6 +185,52 @@ key_p <- ggplot(key_df, aes(f,g, fill=f*g)) +
   scale_fill_gradient(low="white", high="#182B49") +
   th + labs(x="f", y="g")
 ggsave(file.path(out_dir,"diag_fg_bivariate_key.png"), key_p, width=4, height=4, dpi=300)
+```
+
+```{r}
+library(ggplot2)
+
+green  <- col2rgb("#238B45") / 255
+purple <- col2rgb("#6A51A3") / 255
+white  <- c(1, 1, 1)
+black  <- c(0, 0, 0)
+
+n <- 200
+
+df <- expand.grid(
+  f = seq(0, 1, length.out = n),
+  g = seq(0, 1, length.out = n)
+)
+
+df$col <- apply(df, 1, function(x) {
+  f <- x["f"]
+  g <- x["g"]
+
+  col <- (1 - f) * (1 - g) * white +
+    f * (1 - g) * green +
+    (1 - f) * g * purple +
+    f * g * black
+
+  rgb(col[1], col[2], col[3])
+})
+
+p <- ggplot(df, aes(f, g, fill = col)) +
+  geom_raster() +
+  scale_fill_identity() +
+  coord_equal(expand = FALSE) +
+  labs(
+    x = "f dominates",
+    y = "g dominates"
+  ) +
+  theme_classic(base_size = 12) +
+  theme(
+    axis.text = element_blank(),
+    axis.ticks = element_blank()
+  )
+
+p
+
+ggsave(file.path(out_dir,"bivariate_key.png"), p, width=3, height=3, dpi=300)
 ```
 
 ```{r temp-and-o2-limitation, message=FALSE, warning=FALSE}
@@ -229,7 +274,7 @@ p_temp
 lines_O2 <- compute_state_surface(
   tr,
   masses = masses,
-  Tseq = 10,
+  Tseq = c(10),
   pO2seq = seq(0, 30, by = 0.1),
   preys = c(0.5, 0.75),
   prey_units = "feeding_level",
@@ -258,3 +303,103 @@ p_o2 <- ggplot(lines_O2, aes(x = pO2, y = val, color = var, linetype = var, line
 ggsave(file.path(out_dir, "oxygen_limitation_two_sizes.png"), p_o2, width = 7, height = 6, dpi = 300)
 p_o2
 ```
+
+
+```{r}
+# Oxygen cross-sections at fixed T = 10 C
+lines_O2 <- compute_state_surface(
+  tr,
+  masses = masses,
+  Tseq = c(10, 20),
+  pO2seq = seq(0, 30, by = 0.1),
+  preys = c(0.5, 0.75),
+  prey_units = "feeding_level",
+  pair_mode = "cross",
+  progress = TRUE
+) %>%
+  add_masks() %>%
+  mutate(
+    mass_lab = factor(mass, levels = masses, labels = mass_labs),
+    T_lab = factor(T, levels = c(10, 20)),
+    f_ref_lab = factor(f_ref, levels = c(0.5, 0.75))
+  ) %>%
+  select(
+    mass_lab, T_lab, f_ref, f_ref_lab,
+    pO2, E_net_norm, g
+  ) %>%
+  pivot_longer(
+    cols = c(E_net_norm, g),
+    names_to = "var",
+    values_to = "val"
+  )
+
+p_o2_2 <- ggplot(
+  lines_O2,
+  aes(
+    x = pO2,
+    y = val,
+    color = T_lab,
+    linetype = var,
+    linewidth = f_ref_lab,
+    group = interaction(T_lab, f_ref_lab, var)
+  )
+) +
+  geom_line() +
+  scale_color_manual(
+    values = c(
+      `10` = "gray50",
+      `20` = "#C85148"
+    ),
+    labels = c(
+      `10` = expression(10 * degree * C),
+      `20` = expression(20 * degree * C)
+    ),
+    name = "Temperature"
+  ) +
+  scale_linetype_manual(
+    values = c(
+      E_net_norm = "solid",
+      g = "dashed"
+    ),
+    labels = c(
+      E_net_norm = "Available energy",
+      g = "Feeding limitation"
+    ),
+    name = NULL
+  ) +
+  scale_linewidth_manual(
+    values = c(
+      `0.5` = 0.7,
+      `0.75` = 1.6
+    ),
+    labels = c(
+      `0.5` = "0.50",
+      `0.75` = "0.75"
+    ),
+    name = expression(f[ref])
+  ) +
+  facet_grid2(
+    . ~ mass_lab,
+    labeller = labeller(mass_lab = label_parsed)
+  ) +
+  scale_x_continuous(
+    breaks = c(0, 10, 20, 30),
+    limits = c(0, 30),
+    expand = c(0, 0)
+  ) +
+  scale_y_continuous(
+    breaks = seq(0, 1, 0.2),
+    limits = c(0, 1),
+    expand = c(0, 0)
+  ) +
+  labs(
+    x = axis_lab_O2,
+    y = expression("Allocation / " * C[max])
+  ) +
+  th +
+  ggplot2::theme(text = ggplot2::element_text(family = "sans"))
+
+p_o2_2
+```
+
+

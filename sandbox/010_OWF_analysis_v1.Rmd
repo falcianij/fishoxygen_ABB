@@ -36,10 +36,10 @@ O2_range <- c(0, 30)
 
 mass_levels <- c("10^0 g", "10^1 g", "10^2 g", "10^3 g", "10^4 g", "10^5 g", "10^6 g")
 
-mass_levels_ex <- c("10^1 g", "10^5 g")
-mass_labels_ex <- c("w == 10^1~g", "w == 10^5~g")
+mass_levels_ex <- c("10^1 g", "10^6 g")
+mass_labels_ex <- c("w == 10^1~g", "w == 10^6~g")
 
-target_group <- "epipelagic"
+target_group <- "demersal"
 Q_low <- 0.01
 T_segments <- tibble(T_lo = c(5), T_hi = c(15))
 ```
@@ -186,7 +186,7 @@ ggplot(min_po2_by_seg, aes(x = mass_g, y = pO2_min_kPa)) +
   th
 ```
 
-```{r}
+```{r eval=FALSE, include=FALSE}
 write.csv(min_po2_by_seg, file=here("data_out", "FWBocc_pO2min.csv"), row.names = FALSE)
 ```
 

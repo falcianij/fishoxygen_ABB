@@ -238,7 +238,7 @@ plot_surface_masked <- function(df, x, y, z,
   val_pos <- val_df %>% filter(is.finite(.zval) & .zval >= 0)
   
   p <- ggplot() +
-    geom_raster(data = val_na,  aes(.data[[x]], .data[[y]]), fill = "black", interpolate = TRUE) +
+    geom_raster(data = val_na,  aes(.data[[x]], .data[[y]]), fill = "black", interpolate = TRUE) + #440154
     geom_raster(data = val_neg, aes(.data[[x]], .data[[y]]), fill = "grey70", interpolate = TRUE) +
     geom_raster(data = val_pos, aes(.data[[x]], .data[[y]], fill = .zval), interpolate = TRUE)
   
