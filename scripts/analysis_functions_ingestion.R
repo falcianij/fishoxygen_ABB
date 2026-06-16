@@ -169,7 +169,7 @@ compute_state_surface <- function(tr,
       
       c(B_used = B_used, f_ref = f_ref_out,
         U_opt = st$U_opt, nu_net = st$nu_net, E_net = st$E_net, Cmax = st$Cmax,
-        Enc = st$Enc, C_pot = st$C_pot, C_real = st$C_real, I = st$I,
+        Cmax_potential = st$Cmax_potential, Enc = st$Enc, C_pot = st$C_pot, C_real = st$C_real, I = st$I,
         f = st$f, g = st$g, pO2_int = st$pO2_int,
         nu_gain = st$nu_gain, consump = st$consump, A_assim = st$A_assim,
         M_m = st$M_m, M_act = st$M_act, D_SDA = st$D_SDA, M_exc = st$M_exc,

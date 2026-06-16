@@ -4,10 +4,10 @@
 # Variant A:
 #   nu_avail = (1-alpha_SDA-alpha_exc) * C_real - (M_M + M_A)
 # where
-#   f      = Enc / (Enc + Cmax)
-#   C_pot  = f * Cmax
 #   g      = Hill(pO2_int; K_g, h_g)
-#   C_real = g * C_pot
+#   Cmax   = g * Cmax_potential
+#   f      = Enc / (Enc + Cmax)
+#   C_real = C_pot = f * Cmax
 #
 # Internal O2 closure (Rubalcaba-inspired reduced form):
 #   O2_supply = kO*(pO2_env - pO2_int)
@@ -133,11 +133,8 @@ solve_pO2_int <- function(U, pO2_env, T, w, prey, tr, u_prey = 0, D = 3) {
   K_g <- get_par(tr, c("K_g", "K", "K_O2"), default = 2)
   h_g <- get_par(tr, c("h_g", "h", "h_O2"), default = 2)
 
-  Cmax <- Cmax_whole(T, w, tr)
+  Cmax_potential <- Cmax_whole(T, w, tr)
   Enc <- Enc_whole(U, T, w, prey, tr, u_prey = u_prey, D = D)
-
-  f <- if (is.finite(Cmax) && Cmax > 0) Enc / (Enc + Cmax) else NA_real_
-  C_pot <- Cmax * f
 
   Mm <- Mm_whole(T, w, tr)
   Ma <- Ma_whole(U, T, w, tr)
@@ -145,7 +142,9 @@ solve_pO2_int <- function(U, pO2_env, T, w, prey, tr, u_prey = 0, D = 3) {
 
   F <- function(p_int) {
     g <- hill_g(p_int, K_g = K_g, h_g = h_g)
-    C_real <- g * C_pot
+    Cmax <- g * Cmax_potential
+    f <- if (is.finite(Cmax) && Cmax > 0) Enc / (Enc + Cmax) else NA_real_
+    C_real <- Cmax * f
     kO * (pO2_env - p_int) - (Mm + Ma + alpha_SDA * C_real)
   }
 
@@ -156,8 +155,8 @@ solve_pO2_int <- function(U, pO2_env, T, w, prey, tr, u_prey = 0, D = 3) {
     return(list(
       feasible = FALSE,
       pO2_int = NA_real_, g = NA_real_,
-      C_pot = C_pot, C_real = NA_real_, f = f,
-      Mm = Mm, Ma = Ma, kO = kO, Cmax = Cmax, Enc = Enc,
+      C_pot = NA_real_, C_real = NA_real_, f = NA_real_,
+      Mm = Mm, Ma = Ma, kO = kO, Cmax = NA_real_, Cmax_potential = Cmax_potential, Enc = Enc,
       alpha_assim = NA_real_, D_SDA = NA_real_, M_exc = NA_real_,
       O2_supply = NA_real_, O2_demand = NA_real_, O2_margin = NA_real_
     ))
@@ -165,7 +164,10 @@ solve_pO2_int <- function(U, pO2_env, T, w, prey, tr, u_prey = 0, D = 3) {
 
   p_int <- if (abs(f0) <= .TOL) 0 else uniroot(F, c(0, pO2_env))$root
   g <- hill_g(p_int, K_g = K_g, h_g = h_g)
-  C_real <- g * C_pot
+  Cmax <- g * Cmax_potential
+  f <- if (is.finite(Cmax) && Cmax > 0) Enc / (Enc + Cmax) else NA_real_
+  C_pot <- Cmax * f
+  C_real <- C_pot
 
   alpha_assim <- fr$alpha_assim
   alpha_exc <- fr$alpha_exc
@@ -181,7 +183,7 @@ solve_pO2_int <- function(U, pO2_env, T, w, prey, tr, u_prey = 0, D = 3) {
     feasible = TRUE,
     pO2_int = p_int, g = g,
     C_pot = C_pot, C_real = C_real, f = f,
-    Mm = Mm, Ma = Ma, kO = kO, Cmax = Cmax, Enc = Enc,
+    Mm = Mm, Ma = Ma, kO = kO, Cmax = Cmax, Cmax_potential = Cmax_potential, Enc = Enc,
     nu_gain = nu_gain, D_SDA = D_SDA, M_exc = M_exc,
     O2_supply = O2_supply, O2_demand = O2_demand, O2_margin = O2_supply - O2_demand
   )
@@ -215,7 +217,7 @@ find_U_opt <- function(pO2_env, T, w, prey, tr, u_prey = 0, D = 3,
     Mm <- Mm_whole(T, w, tr)
     Ma <- Ma_whole(U_lo, T, w, tr)
     return(list(
-      M_m = Mm, M_act = Ma, Cmax = NA_real_, Enc = NA_real_,
+      M_m = Mm, M_act = Ma, Cmax = NA_real_, Cmax_potential = Cmax_whole(T, w, tr), Enc = NA_real_,
       C_pot = NA_real_, C_real = NA_real_, I = NA_real_,
       f = NA_real_, g = NA_real_, pO2_int = NA_real_,
       nu_net = NA_real_, U_opt = NA_real_,
@@ -226,7 +228,10 @@ find_U_opt <- function(pO2_env, T, w, prey, tr, u_prey = 0, D = 3,
     ))
   }
 
-  obj <- function(U) nu_avail(U, pO2_env, T, w, prey, tr, u_prey = u_prey, D = D)
+  obj <- function(U) {
+    val <- nu_avail(U, pO2_env, T, w, prey, tr, u_prey = u_prey, D = D)
+    if (is.finite(val)) val else -.Machine$double.xmax
+  }
   opt <- optimize(obj, interval = c(U_lo, U_cap), maximum = TRUE)
   Ustar <- opt$maximum
 
@@ -234,7 +239,7 @@ find_U_opt <- function(pO2_env, T, w, prey, tr, u_prey = 0, D = 3,
   nu_net <- if (isTRUE(st$feasible)) st$nu_gain - (st$Mm + st$Ma) else NA_real_
 
   list(
-    M_m = st$Mm, M_act = st$Ma, Cmax = st$Cmax, Enc = st$Enc,
+    M_m = st$Mm, M_act = st$Ma, Cmax = st$Cmax, Cmax_potential = st$Cmax_potential, Enc = st$Enc,
     C_pot = st$C_pot, C_real = st$C_real, I = st$C_real,
     f = st$f, g = st$g, pO2_int = st$pO2_int,
     nu_gain = st$nu_gain, nu_net = nu_net, U_opt = Ustar,

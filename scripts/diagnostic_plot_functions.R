@@ -6,9 +6,10 @@
 # - Keep Rmd thin: interpolation + masking live here.
 # - Per-plot contour control (none / bins / breaks / multiple overlays).
 # - Consistent with updated model scripts:
-#     * f = Enc/(Enc + Cmax)  (encounter saturation)
 #     * g = Hill(pO2_int)
-#     * proc_real_frac = C_real/C_pot  (equals g in current model)
+#     * Cmax = g*Cmax_potential
+#     * f = Enc/(Enc + Cmax)  (encounter saturation against O2-constrained Cmax)
+#     * proc_real_frac = C_real/C_pot  (equals 1 when C_pot is finite)
 #     * D_SDA = alpha_SDA*C_real, M_exc = alpha_exc*C_real, nu_gain=(1-alpha_SDA-alpha_exc)*C_real
 #     * B_from_f inverts the full model (optimized U + O2 closure)
 # -------------------------------------------------------------------
