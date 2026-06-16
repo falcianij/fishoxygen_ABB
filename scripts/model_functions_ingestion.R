@@ -2,7 +2,7 @@
 # -------------------------------------------------------------------
 # Bioenergetics fish model core functions (ingestion-decision form)
 # Variant A:
-#   nu_avail = (1-alpha_SDA-alpha_exc) * C_real - (M_M + M_A)
+#   E_net = A_assim - (M_M + M_A)
 # where
 #   g      = Hill(pO2_int; K_g, h_g)
 #   Cmax   = g * Cmax_potential
@@ -172,9 +172,10 @@ solve_pO2_int <- function(U, pO2_env, T, w, prey, tr, u_prey = 0, D = 3) {
   alpha_assim <- fr$alpha_assim
   alpha_exc <- fr$alpha_exc
 
-  nu_gain <- alpha_assim * C_real
+  A_assim <- alpha_assim * C_real
   D_SDA <- alpha_SDA * C_real
   M_exc <- alpha_exc * C_real
+  E_net <- A_assim - (Mm + Ma)
 
   O2_supply <- kO * (pO2_env - p_int)
   O2_demand <- Mm + Ma + D_SDA
@@ -184,16 +185,18 @@ solve_pO2_int <- function(U, pO2_env, T, w, prey, tr, u_prey = 0, D = 3) {
     pO2_int = p_int, g = g,
     C_pot = C_pot, C_real = C_real, f = f,
     Mm = Mm, Ma = Ma, kO = kO, Cmax = Cmax, Cmax_potential = Cmax_potential, Enc = Enc,
-    nu_gain = nu_gain, D_SDA = D_SDA, M_exc = M_exc,
+    A_assim = A_assim, E_net = E_net,
+    D_SDA = D_SDA, M_exc = M_exc,
     O2_supply = O2_supply, O2_demand = O2_demand, O2_margin = O2_supply - O2_demand
   )
 }
 
-nu_avail <- function(U, pO2_env, T, w, prey, tr, u_prey = 0, D = 3) {
+E_avail <- function(U, pO2_env, T, w, prey, tr, u_prey = 0, D = 3) {
   st <- solve_pO2_int(U, pO2_env, T, w, prey, tr, u_prey = u_prey, D = D)
   if (!isTRUE(st$feasible)) return(NA_real_)
-  st$nu_gain - (st$Mm + st$Ma)
+  st$E_net
 }
+
 
 cap_U_by_O2_idle <- function(pO2_env, T, w, tr, U_lo = 1e-5, U_mech = 10) {
   kO <- kO_whole(T, w, tr)
@@ -220,38 +223,33 @@ find_U_opt <- function(pO2_env, T, w, prey, tr, u_prey = 0, D = 3,
       M_m = Mm, M_act = Ma, Cmax = NA_real_, Cmax_potential = Cmax_whole(T, w, tr), Enc = NA_real_,
       C_pot = NA_real_, C_real = NA_real_, I = NA_real_,
       f = NA_real_, g = NA_real_, pO2_int = NA_real_,
-      nu_net = NA_real_, U_opt = NA_real_,
+      E_net = NA_real_, U_opt = NA_real_,
       O2_supply = NA_real_, O2_demand = NA_real_, O2_margin = NA_real_,
       oxygen_exclusion = TRUE, energetic_exclusion = NA,
-      D_SDA = NA_real_, M_exc = NA_real_, nu_gain = NA_real_,
-      consump = NA_real_, E_net = NA_real_, A_assim = NA_real_
+      D_SDA = NA_real_, M_exc = NA_real_, A_assim = NA_real_
     ))
   }
 
   obj <- function(U) {
-    val <- nu_avail(U, pO2_env, T, w, prey, tr, u_prey = u_prey, D = D)
+    val <- E_avail(U, pO2_env, T, w, prey, tr, u_prey = u_prey, D = D)
     if (is.finite(val)) val else -.Machine$double.xmax
   }
   opt <- optimize(obj, interval = c(U_lo, U_cap), maximum = TRUE)
   Ustar <- opt$maximum
 
   st <- solve_pO2_int(Ustar, pO2_env, T, w, prey, tr, u_prey = u_prey, D = D)
-  nu_net <- if (isTRUE(st$feasible)) st$nu_gain - (st$Mm + st$Ma) else NA_real_
+  E_net <- if (isTRUE(st$feasible)) st$E_net else NA_real_
 
   list(
     M_m = st$Mm, M_act = st$Ma, Cmax = st$Cmax, Cmax_potential = st$Cmax_potential, Enc = st$Enc,
     C_pot = st$C_pot, C_real = st$C_real, I = st$C_real,
     f = st$f, g = st$g, pO2_int = st$pO2_int,
-    nu_gain = st$nu_gain, nu_net = nu_net, U_opt = Ustar,
+    A_assim = st$A_assim, E_net = E_net, U_opt = Ustar,
     O2_supply = st$O2_supply, O2_demand = st$O2_demand, O2_margin = st$O2_margin,
     oxygen_exclusion = FALSE,
-    energetic_exclusion = is.finite(nu_net) && nu_net <= 0,
+    energetic_exclusion = is.finite(E_net) && E_net <= 0,
     D_SDA = st$D_SDA,
-    M_exc = st$M_exc,
-    # backward-compat aliases
-    consump = st$nu_gain,
-    E_net = nu_net,
-    A_assim = st$nu_gain
+    M_exc = st$M_exc
   )
 }
 
@@ -372,8 +370,7 @@ allocation_from_forced_f <- function(T, pO2_env, f_target, w, tr,
   st <- find_U_opt(pO2_env, T, w, prey = B_need, tr, u_prey = u_prey, D = D,
                    U_lo = U_lo, U_mech = U_mech)
 
-  list(M_m = st$M_m, M_act = st$M_act, nu_gain = st$nu_gain,
-       nu_net = st$nu_net, U = U_use, prey = B_need, f = st$f,
-       C_pot = st$C_pot, C_real = st$C_real, g = st$g, pO2_int = st$pO2_int,
-       consump = st$consump, E_net = st$E_net)
+  list(M_m = st$M_m, M_act = st$M_act, A_assim = st$A_assim,
+       E_net = st$E_net, U = U_use, prey = B_need, f = st$f,
+       C_pot = st$C_pot, C_real = st$C_real, g = st$g, pO2_int = st$pO2_int)
 }

@@ -18,7 +18,7 @@ compute_state_surface <- function(tr,
                                   slopes = -0.08,
                                   w0 = 1,
                                   pair_mode = c("auto", "cross", "zip"),
-                                  normalize_nu = TRUE,
+                                  normalize_E = TRUE,
                                   progress = TRUE,
                                   T_ref = tr$T_ref,
                                   pO2_ref = 25,
@@ -168,10 +168,10 @@ compute_state_surface <- function(tr,
                        u_prey = u_prey, D = D, U_lo = U_lo, U_mech = U_mech)
       
       c(B_used = B_used, f_ref = f_ref_out,
-        U_opt = st$U_opt, nu_net = st$nu_net, E_net = st$E_net, Cmax = st$Cmax,
+        U_opt = st$U_opt, E_net = st$E_net, Cmax = st$Cmax,
         Cmax_potential = st$Cmax_potential, Enc = st$Enc, C_pot = st$C_pot, C_real = st$C_real, I = st$I,
         f = st$f, g = st$g, pO2_int = st$pO2_int,
-        nu_gain = st$nu_gain, consump = st$consump, A_assim = st$A_assim,
+        A_assim = st$A_assim,
         M_m = st$M_m, M_act = st$M_act, D_SDA = st$D_SDA, M_exc = st$M_exc,
         O2_supply = st$O2_supply, O2_demand = st$O2_demand, O2_margin = st$O2_margin,
         oxygen_exclusion = as.numeric(st$oxygen_exclusion),
@@ -186,11 +186,19 @@ compute_state_surface <- function(tr,
   
   res <- dplyr::bind_rows(blocks)
   
-  if (isTRUE(normalize_nu)) {
-    res <- dplyr::mutate(res,
-                         nu_net_norm = dplyr::if_else(is.finite(nu_net) & is.finite(Cmax) & Cmax != 0, nu_net / Cmax, NA_real_),
-                         E_net_norm = dplyr::if_else(is.finite(E_net) & is.finite(Cmax) & Cmax != 0, E_net / Cmax, NA_real_),
-                         proc_real_frac = dplyr::if_else(is.finite(C_real) & is.finite(C_pot) & C_pot != 0, C_real / C_pot, NA_real_)
+  if (isTRUE(normalize_E)) {
+    res <- dplyr::mutate(
+      res,
+      E_net_norm = dplyr::if_else(
+        is.finite(.data$E_net) & is.finite(.data$Cmax) & .data$Cmax != 0,
+        .data$E_net / .data$Cmax,
+        NA_real_
+      ),
+      Cmax_frac = dplyr::if_else(
+        is.finite(.data$Cmax) & is.finite(.data$Cmax_potential) & .data$Cmax_potential != 0,
+        .data$Cmax / .data$Cmax_potential,
+        NA_real_
+      )
     )
   }
   
