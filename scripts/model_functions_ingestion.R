@@ -2,12 +2,12 @@
 # -------------------------------------------------------------------
 # Bioenergetics fish model core functions (ingestion-decision form)
 # Variant A:
-#   nu_avail = (1-alpha_SDA-alpha_exc) * C_real - (M_M + M_A)
+#   E_net = A_assim - (M_M + M_A)
 # where
-#   f      = Enc / (Enc + Cmax)
-#   C_pot  = f * Cmax
 #   g      = Hill(pO2_int; K_g, h_g)
-#   C_real = g * C_pot
+#   Cmax   = g * Cmax_potential
+#   f      = Enc / (Enc + Cmax)
+#   C_real = C_pot = f * Cmax
 #
 # Internal O2 closure (Rubalcaba-inspired reduced form):
 #   O2_supply = kO*(pO2_env - pO2_int)
@@ -112,6 +112,18 @@ hill_g <- function(p, K_g, h_g) {
   p_use^h_g / (p_use^h_g + K_g^h_g)
 }
 
+
+processing_state <- function(Enc, Cmax_potential, p_int, K_g, h_g) {
+  g <- hill_g(p_int, K_g = K_g, h_g = h_g)
+  Cmax <- g * Cmax_potential
+  denom <- Enc + Cmax
+
+  f <- if (is.finite(denom) && denom > 0) Enc / denom else 0
+  C_proc <- if (is.finite(denom) && denom > 0) Enc * Cmax / denom else 0
+
+  list(g = g, Cmax = Cmax, f = f, C_proc = C_proc)
+}
+
 kO_whole <- function(T, w, tr) {
   a_O <- get_par(tr, c("a_O", "a_o"), required = TRUE)
 
@@ -133,20 +145,16 @@ solve_pO2_int <- function(U, pO2_env, T, w, prey, tr, u_prey = 0, D = 3) {
   K_g <- get_par(tr, c("K_g", "K", "K_O2"), default = 2)
   h_g <- get_par(tr, c("h_g", "h", "h_O2"), default = 2)
 
-  Cmax <- Cmax_whole(T, w, tr)
+  Cmax_potential <- Cmax_whole(T, w, tr)
   Enc <- Enc_whole(U, T, w, prey, tr, u_prey = u_prey, D = D)
-
-  f <- if (is.finite(Cmax) && Cmax > 0) Enc / (Enc + Cmax) else NA_real_
-  C_pot <- Cmax * f
 
   Mm <- Mm_whole(T, w, tr)
   Ma <- Ma_whole(U, T, w, tr)
   kO <- kO_whole(T, w, tr)
 
   F <- function(p_int) {
-    g <- hill_g(p_int, K_g = K_g, h_g = h_g)
-    C_real <- g * C_pot
-    kO * (pO2_env - p_int) - (Mm + Ma + alpha_SDA * C_real)
+    proc <- processing_state(Enc, Cmax_potential, p_int, K_g = K_g, h_g = h_g)
+    kO * (pO2_env - p_int) - (Mm + Ma + alpha_SDA * proc$C_proc)
   }
 
   f0 <- F(0)
@@ -156,23 +164,29 @@ solve_pO2_int <- function(U, pO2_env, T, w, prey, tr, u_prey = 0, D = 3) {
     return(list(
       feasible = FALSE,
       pO2_int = NA_real_, g = NA_real_,
-      C_pot = C_pot, C_real = NA_real_, f = f,
-      Mm = Mm, Ma = Ma, kO = kO, Cmax = Cmax, Enc = Enc,
+      C_pot = NA_real_, C_real = NA_real_, f = NA_real_,
+      Mm = Mm, Ma = Ma, kO = kO, Cmax = NA_real_, Cmax_potential = Cmax_potential, Enc = Enc,
+      A_assim = NA_real_, E_net = NA_real_,
       alpha_assim = NA_real_, D_SDA = NA_real_, M_exc = NA_real_,
       O2_supply = NA_real_, O2_demand = NA_real_, O2_margin = NA_real_
     ))
   }
 
   p_int <- if (abs(f0) <= .TOL) 0 else uniroot(F, c(0, pO2_env))$root
-  g <- hill_g(p_int, K_g = K_g, h_g = h_g)
-  C_real <- g * C_pot
+  proc <- processing_state(Enc, Cmax_potential, p_int, K_g = K_g, h_g = h_g)
+  g <- proc$g
+  Cmax <- proc$Cmax
+  f <- proc$f
+  C_pot <- proc$C_proc
+  C_real <- proc$C_proc
 
   alpha_assim <- fr$alpha_assim
   alpha_exc <- fr$alpha_exc
 
-  nu_gain <- alpha_assim * C_real
+  A_assim <- alpha_assim * C_real
   D_SDA <- alpha_SDA * C_real
   M_exc <- alpha_exc * C_real
+  E_net <- A_assim - (Mm + Ma)
 
   O2_supply <- kO * (pO2_env - p_int)
   O2_demand <- Mm + Ma + D_SDA
@@ -181,17 +195,19 @@ solve_pO2_int <- function(U, pO2_env, T, w, prey, tr, u_prey = 0, D = 3) {
     feasible = TRUE,
     pO2_int = p_int, g = g,
     C_pot = C_pot, C_real = C_real, f = f,
-    Mm = Mm, Ma = Ma, kO = kO, Cmax = Cmax, Enc = Enc,
-    nu_gain = nu_gain, D_SDA = D_SDA, M_exc = M_exc,
+    Mm = Mm, Ma = Ma, kO = kO, Cmax = Cmax, Cmax_potential = Cmax_potential, Enc = Enc,
+    A_assim = A_assim, E_net = E_net,
+    D_SDA = D_SDA, M_exc = M_exc,
     O2_supply = O2_supply, O2_demand = O2_demand, O2_margin = O2_supply - O2_demand
   )
 }
 
-nu_avail <- function(U, pO2_env, T, w, prey, tr, u_prey = 0, D = 3) {
+E_avail <- function(U, pO2_env, T, w, prey, tr, u_prey = 0, D = 3) {
   st <- solve_pO2_int(U, pO2_env, T, w, prey, tr, u_prey = u_prey, D = D)
   if (!isTRUE(st$feasible)) return(NA_real_)
-  st$nu_gain - (st$Mm + st$Ma)
+  st$E_net
 }
+
 
 cap_U_by_O2_idle <- function(pO2_env, T, w, tr, U_lo = 1e-5, U_mech = 10) {
   kO <- kO_whole(T, w, tr)
@@ -215,38 +231,36 @@ find_U_opt <- function(pO2_env, T, w, prey, tr, u_prey = 0, D = 3,
     Mm <- Mm_whole(T, w, tr)
     Ma <- Ma_whole(U_lo, T, w, tr)
     return(list(
-      M_m = Mm, M_act = Ma, Cmax = NA_real_, Enc = NA_real_,
+      M_m = Mm, M_act = Ma, Cmax = NA_real_, Cmax_potential = Cmax_whole(T, w, tr), Enc = NA_real_,
       C_pot = NA_real_, C_real = NA_real_, I = NA_real_,
       f = NA_real_, g = NA_real_, pO2_int = NA_real_,
-      nu_net = NA_real_, U_opt = NA_real_,
+      E_net = NA_real_, U_opt = NA_real_,
       O2_supply = NA_real_, O2_demand = NA_real_, O2_margin = NA_real_,
       oxygen_exclusion = TRUE, energetic_exclusion = NA,
-      D_SDA = NA_real_, M_exc = NA_real_, nu_gain = NA_real_,
-      consump = NA_real_, E_net = NA_real_, A_assim = NA_real_
+      D_SDA = NA_real_, M_exc = NA_real_, A_assim = NA_real_
     ))
   }
 
-  obj <- function(U) nu_avail(U, pO2_env, T, w, prey, tr, u_prey = u_prey, D = D)
+  obj <- function(U) {
+    val <- E_avail(U, pO2_env, T, w, prey, tr, u_prey = u_prey, D = D)
+    if (is.finite(val)) val else -.Machine$double.xmax
+  }
   opt <- optimize(obj, interval = c(U_lo, U_cap), maximum = TRUE)
   Ustar <- opt$maximum
 
   st <- solve_pO2_int(Ustar, pO2_env, T, w, prey, tr, u_prey = u_prey, D = D)
-  nu_net <- if (isTRUE(st$feasible)) st$nu_gain - (st$Mm + st$Ma) else NA_real_
+  E_net <- if (isTRUE(st$feasible)) st$E_net else NA_real_
 
   list(
-    M_m = st$Mm, M_act = st$Ma, Cmax = st$Cmax, Enc = st$Enc,
+    M_m = st$Mm, M_act = st$Ma, Cmax = st$Cmax, Cmax_potential = st$Cmax_potential, Enc = st$Enc,
     C_pot = st$C_pot, C_real = st$C_real, I = st$C_real,
     f = st$f, g = st$g, pO2_int = st$pO2_int,
-    nu_gain = st$nu_gain, nu_net = nu_net, U_opt = Ustar,
+    A_assim = st$A_assim, E_net = E_net, U_opt = Ustar,
     O2_supply = st$O2_supply, O2_demand = st$O2_demand, O2_margin = st$O2_margin,
     oxygen_exclusion = FALSE,
-    energetic_exclusion = is.finite(nu_net) && nu_net <= 0,
+    energetic_exclusion = is.finite(E_net) && E_net <= 0,
     D_SDA = st$D_SDA,
-    M_exc = st$M_exc,
-    # backward-compat aliases
-    consump = st$nu_gain,
-    E_net = nu_net,
-    A_assim = st$nu_gain
+    M_exc = st$M_exc
   )
 }
 
@@ -367,8 +381,7 @@ allocation_from_forced_f <- function(T, pO2_env, f_target, w, tr,
   st <- find_U_opt(pO2_env, T, w, prey = B_need, tr, u_prey = u_prey, D = D,
                    U_lo = U_lo, U_mech = U_mech)
 
-  list(M_m = st$M_m, M_act = st$M_act, nu_gain = st$nu_gain,
-       nu_net = st$nu_net, U = U_use, prey = B_need, f = st$f,
-       C_pot = st$C_pot, C_real = st$C_real, g = st$g, pO2_int = st$pO2_int,
-       consump = st$consump, E_net = st$E_net)
+  list(M_m = st$M_m, M_act = st$M_act, A_assim = st$A_assim,
+       E_net = st$E_net, U = U_use, prey = B_need, f = st$f,
+       C_pot = st$C_pot, C_real = st$C_real, g = st$g, pO2_int = st$pO2_int)
 }

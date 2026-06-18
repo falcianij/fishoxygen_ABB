@@ -18,17 +18,17 @@ compute_state_surface <- function(tr,
                                   slopes = -0.08,
                                   w0 = 1,
                                   pair_mode = c("auto", "cross", "zip"),
-                                  normalize_nu = TRUE,
+                                  normalize_E = TRUE,
                                   progress = TRUE,
                                   T_ref = tr$T_ref,
                                   pO2_ref = 25,
                                   U_lo = 1e-5, U_mech = 5,
                                   enforce_O2_feasible = TRUE,
                                   u_prey = 0, D = 3) {
-  
+
   prey_units <- match.arg(prey_units)
   pair_mode <- match.arg(pair_mode)
-  
+
   make_spec_cross <- function() {
     if (prey_units %in% c("biomass", "prey_index", "feeding_level")) {
       tidyr::expand_grid(mass = masses, prey_arg = preys)
@@ -50,12 +50,12 @@ compute_state_surface <- function(tr,
       )
     }
   }
-  
+
   if (pair_mode == "auto") {
     pair_mode <- if (length(masses) > 1 && !is.null(preys) && length(preys) == length(masses)) "zip" else "cross"
   }
   spec <- if (pair_mode == "zip") make_spec_zip() else make_spec_cross()
-  
+
   # ----------------------- timing helpers -----------------------
   t0 <- Sys.time()
   fmt_elapsed <- function(t_start) {
@@ -64,10 +64,10 @@ compute_state_surface <- function(tr,
     secs <- round(dt - 60 * mins)
     sprintf("%dm %02ds", mins, secs)
   }
-  
+
   # ----------------------- caching for B_from_f -----------------------
   cache <- new.env(parent = emptyenv())
-  
+
   key_pi <- function(w, f_ref) {
     paste0("pi|m=", signif(w, 12),
            "|f=", signif(f_ref, 12),
@@ -90,7 +90,7 @@ compute_state_surface <- function(tr,
            "|uprey=", signif(u_prey, 12),
            "|D=", D)
   }
-  
+
   get_B_prey_index <- function(w, f_ref) {
     k <- key_pi(w, f_ref)
     if (exists(k, envir = cache, inherits = FALSE)) return(get(k, envir = cache, inherits = FALSE))
@@ -102,7 +102,7 @@ compute_state_surface <- function(tr,
     assign(k, B, envir = cache)
     B
   }
-  
+
   get_B_feeding_level <- function(w, f_ref, Tval) {
     k <- key_fl(w, f_ref, Tval)
     if (exists(k, envir = cache, inherits = FALSE)) return(get(k, envir = cache, inherits = FALSE))
@@ -114,19 +114,26 @@ compute_state_surface <- function(tr,
     assign(k, B, envir = cache)
     B
   }
-  
+
   # ----------------------- progress bar -----------------------
   if (isTRUE(progress)) {
     pb <- utils::txtProgressBar(min = 0, max = nrow(spec), style = 3)
     on.exit(try(close(pb), silent = TRUE), add = TRUE)
   }
-  
+
+
+  scalar <- function(x) {
+    if (is.null(x) || length(x) == 0) return(NA_real_)
+    x <- x[[1]]
+    if (is.null(x) || length(x) == 0) NA_real_ else as.numeric(x)
+  }
+
   blocks <- vector("list", nrow(spec))
-  
+
   for (i in seq_len(nrow(spec))) {
     w <- spec$mass[i]
     grid <- tidyr::expand_grid(T = Tseq, pO2 = pO2seq)
-    
+
     if (prey_units == "biomass") {
       B_mode <- "biomass"
       B_const <- spec$prey_arg[i]
@@ -136,7 +143,7 @@ compute_state_surface <- function(tr,
       B_mode <- prey_units
       f_ref <- pmin(pmax(spec$prey_arg[i], .Machine$double.eps), 1 - .Machine$double.eps)
       f_ref_out <- spec$prey_arg[i]
-      
+
       if (prey_units == "prey_index") {
         B_const <- get_B_prey_index(w, f_ref)
         B_lookup <- NULL
@@ -151,11 +158,11 @@ compute_state_surface <- function(tr,
       f_ref_out <- NA_real_
       B_lookup <- NULL
     }
-    
+
     rr <- apply(as.matrix(grid), 1, function(row) {
       Tval <- as.numeric(row[[1]])
       pO2v <- as.numeric(row[[2]])
-      
+
       B_used <- if (B_mode == "feeding_level") {
         idx <- match(Tval, Tseq)
         if (is.na(idx)) idx <- which.min(abs(Tseq - Tval))
@@ -163,41 +170,56 @@ compute_state_surface <- function(tr,
       } else {
         B_const
       }
-      
+
       st <- find_U_opt(pO2_env = pO2v, T = Tval, w = w, prey = B_used, tr = tr,
                        u_prey = u_prey, D = D, U_lo = U_lo, U_mech = U_mech)
-      
-      c(B_used = B_used, f_ref = f_ref_out,
-        U_opt = st$U_opt, nu_net = st$nu_net, E_net = st$E_net, Cmax = st$Cmax,
-        Enc = st$Enc, C_pot = st$C_pot, C_real = st$C_real, I = st$I,
-        f = st$f, g = st$g, pO2_int = st$pO2_int,
-        nu_gain = st$nu_gain, consump = st$consump, A_assim = st$A_assim,
-        M_m = st$M_m, M_act = st$M_act, D_SDA = st$D_SDA, M_exc = st$M_exc,
-        O2_supply = st$O2_supply, O2_demand = st$O2_demand, O2_margin = st$O2_margin,
-        oxygen_exclusion = as.numeric(st$oxygen_exclusion),
-        energetic_exclusion = as.numeric(st$energetic_exclusion))
+
+      c(B_used = scalar(B_used), f_ref = scalar(f_ref_out),
+        U_opt = scalar(st$U_opt), E_net = scalar(st$E_net), Cmax = scalar(st$Cmax),
+        Cmax_potential = scalar(st$Cmax_potential), Enc = scalar(st$Enc),
+        C_pot = scalar(st$C_pot), C_real = scalar(st$C_real), I = scalar(st$I),
+        f = scalar(st$f), g = scalar(st$g), pO2_int = scalar(st$pO2_int),
+        A_assim = scalar(st$A_assim),
+        M_m = scalar(st$M_m), M_act = scalar(st$M_act), D_SDA = scalar(st$D_SDA), M_exc = scalar(st$M_exc),
+        O2_supply = scalar(st$O2_supply), O2_demand = scalar(st$O2_demand), O2_margin = scalar(st$O2_margin),
+        oxygen_exclusion = scalar(st$oxygen_exclusion),
+        energetic_exclusion = scalar(st$energetic_exclusion))
     })
-    
+
     blk <- dplyr::bind_cols(tibble::tibble(mass = w), grid, as.data.frame(t(rr)))
     blocks[[i]] <- blk
-    
+
     if (isTRUE(progress)) utils::setTxtProgressBar(pb, i)
   }
-  
+
   res <- dplyr::bind_rows(blocks)
-  
-  if (isTRUE(normalize_nu)) {
-    res <- dplyr::mutate(res,
-                         nu_net_norm = dplyr::if_else(is.finite(nu_net) & is.finite(Cmax) & Cmax != 0, nu_net / Cmax, NA_real_),
-                         E_net_norm = dplyr::if_else(is.finite(E_net) & is.finite(Cmax) & Cmax != 0, E_net / Cmax, NA_real_),
-                         proc_real_frac = dplyr::if_else(is.finite(C_real) & is.finite(C_pot) & C_pot != 0, C_real / C_pot, NA_real_)
+
+  required_cols <- c("E_net", "Cmax", "Cmax_potential")
+  missing_cols <- setdiff(required_cols, names(res))
+  if (length(missing_cols) > 0) {
+    stop("compute_state_surface() internal error: missing required column(s): ", paste(missing_cols, collapse = ", "))
+  }
+
+  if (isTRUE(normalize_E)) {
+    res <- dplyr::mutate(
+      res,
+      E_net_norm = dplyr::if_else(
+        is.finite(.data$E_net) & is.finite(.data$Cmax) & .data$Cmax != 0,
+        .data$E_net / .data$Cmax,
+        NA_real_
+      ),
+      Cmax_frac = dplyr::if_else(
+        is.finite(.data$Cmax) & is.finite(.data$Cmax_potential) & .data$Cmax_potential != 0,
+        .data$Cmax / .data$Cmax_potential,
+        NA_real_
+      )
     )
   }
-  
+
   if (isTRUE(progress)) {
     message(" compute_state_surface(): done in ", fmt_elapsed(t0))
   }
-  
+
   tibble::as_tibble(res)
 }
 
@@ -222,7 +244,7 @@ add_regime_labels_ingestion <- function(df,
         TRUE ~ "Unclassified"
       )
     )
-  
+
   if (!keep_helpers) out <- dplyr::select(out, -exclusion, -prey_limited, -oxygen_limited, -co_limited)
   out
 }
@@ -230,26 +252,26 @@ add_regime_labels_ingestion <- function(df,
 interp_to_grid <- function(df, xcol, ycol, zcol, nx = 500, ny = 500) {
   x <- df[[xcol]]; y <- df[[ycol]]; z <- df[[zcol]]
   ok <- is.finite(x) & is.finite(y) & is.finite(z)
-  
+
   if (sum(ok) < 3) {
     out <- df[ok, c(xcol, ycol, zcol), drop = FALSE]
     return(out)
   }
-  
+
   xo <- seq(min(x[ok]), max(x[ok]), length.out = nx)
   yo <- seq(min(y[ok]), max(y[ok]), length.out = ny)
-  
+
   ip <- interp::interp(x[ok], y[ok], z[ok], xo = xo, yo = yo,
                        linear = TRUE, extrap = FALSE, duplicate = "mean")
-  
+
   out <- expand.grid(stats::setNames(list(xo, yo), c(xcol, ycol)))
   zvec <- as.vector(ip$z)
   expected <- nrow(out)
-  
+
   if (length(zvec) != expected) {
     return(df[ok, c(xcol, ycol, zcol), drop = FALSE])
   }
-  
+
   out[[zcol]] <- zvec
   out
 }

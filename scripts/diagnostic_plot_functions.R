@@ -6,10 +6,11 @@
 # - Keep Rmd thin: interpolation + masking live here.
 # - Per-plot contour control (none / bins / breaks / multiple overlays).
 # - Consistent with updated model scripts:
-#     * f = Enc/(Enc + Cmax)  (encounter saturation)
 #     * g = Hill(pO2_int)
-#     * proc_real_frac = C_real/C_pot  (equals g in current model)
-#     * D_SDA = alpha_SDA*C_real, M_exc = alpha_exc*C_real, nu_gain=(1-alpha_SDA-alpha_exc)*C_real
+#     * Cmax = g*Cmax_potential
+#     * f = Enc/(Enc + Cmax)  (encounter saturation against O2-constrained Cmax)
+#     * Cmax_frac = Cmax/Cmax_potential  (equals g when finite)
+#     * D_SDA = alpha_SDA*C_real, M_exc = alpha_exc*C_real, A_assim=(1-alpha_SDA-alpha_exc)*C_real
 #     * B_from_f inverts the full model (optimized U + O2 closure)
 # -------------------------------------------------------------------
 
@@ -145,7 +146,7 @@ contour_spec <- function(z,
 default_contours <- function(zname) {
   if (identical(zname, "f") || identical(zname, "g")) {
     contour_spec(z = zname, breaks = seq(0, 1, by = 0.2), linewidth = 0.25, alpha = 0.9)
-  } else if (identical(zname, "nu_net_norm")) {
+  } else if (identical(zname, "E_net_norm")) {
     contour_spec(z = zname, breaks = seq(0, 1, by = 0.1), linewidth = 0.25, alpha = 0.9)
   } else {
     contour_spec(z = zname, bins = 5, linewidth = 0.25, alpha = 0.7)
@@ -293,32 +294,33 @@ plot_surface_masked <- function(df, x, y, z,
 
 # --------------------------- Convenience diagnostics ---------------------------
 
-# "available energy" uses nu_net_norm with NA/neg/pos handling; now just a thin wrapper.
+# "available energy" uses E_net_norm with NA/neg/pos handling; now just a thin wrapper.
 plot_available_energy <- function(df, x = c("B_used", "f_ref", "T"), y = "pO2",
                                   contours = "auto",
                                   ...) {
   x <- match.arg(x)
-  plot_surface_masked(df, x = x, y = y, z = "nu_net_norm",
-                      palette = "blue", fill_title = "nu/Cmax",
+  plot_surface_masked(df, x = x, y = y, z = "E_net_norm",
+                      palette = "blue", fill_title = "E/Cmax",
                       contours = contours,
                       ...) +
     labs(x = x, y = y, title = "Available energy (masked)")
 }
 
-# Metabolic allocation facets (uses updated names: M_m, M_act, D_SDA, nu_gain, M_exc)
+# Metabolic allocation facets (uses updated names: M_m, M_act, D_SDA, A_assim, M_exc)
 plot_metabolic_allocation <- function(df, x = c("B_used", "f_ref", "T"), y = "pO2",
                                       interpolate = TRUE, nx = 300, ny = 300,
                                       facet_scales = "free",
                                       theme = theme_surface_default()) {
   x <- match.arg(x)
   
+
   dd <- df %>%
     transmute(xvar = .data[[x]], yvar = .data[[y]],
               Maintenance = M_m,
               Activity = M_act,
               SDA = D_SDA,
               Excretion = M_exc,
-              Assimilation = nu_gain) %>%
+              Assimilation = A_assim) %>%
     pivot_longer(cols = c(Maintenance, Activity, SDA, Excretion, Assimilation),
                  names_to = "process", values_to = "value")
   
@@ -347,15 +349,25 @@ plot_process_reference <- function(df, x = c("B_used", "f_ref"), y = "pO2",
                                    theme = theme_surface_default()) {
   x <- match.arg(x)
   
+  if (!"Cmax_frac" %in% names(df) && all(c("Cmax", "Cmax_potential") %in% names(df))) {
+    df <- df %>%
+      mutate(Cmax_frac = if_else(
+        is.finite(.data$Cmax) & is.finite(.data$Cmax_potential) & .data$Cmax_potential != 0,
+        .data$Cmax / .data$Cmax_potential,
+        NA_real_
+      ))
+  }
+
   dd <- df %>%
     transmute(xvar = .data[[x]], yvar = .data[[y]],
               Encounter = Enc,
               Cmax = Cmax,
+              Cmax_potential = Cmax_potential,
               C_pot = C_pot,
               C_real = C_real,
               g = g,
               f = f,
-              `C_real/C_pot` = proc_real_frac,
+              `Cmax/Cmax_potential` = Cmax_frac,
               `O2 supply` = O2_supply,
               `O2 demand` = O2_demand,
               `pO2_int` = pO2_int) %>%
@@ -380,7 +392,6 @@ plot_fg_bivariate <- function(df, x, y,
                               contour_f = TRUE,
                               contour_g = TRUE,
                               contour_fg_eq = TRUE,
-                              contour_fg_mult = TRUE,
                               breaks_fg = seq(0, 1, by = 0.2),
                               theme = theme_surface_default()) {
   
@@ -396,7 +407,6 @@ plot_fg_bivariate <- function(df, x, y,
       f = if_else(is.finite(f), pmin(pmax(f, 0), 1), NA_real_),
       g = if_else(is.finite(g), pmin(pmax(g, 0), 1), NA_real_),
       fg_eq = f - g,
-      fg_mult = f * g,
       prey_lim = 1 - f,
       oxy_lim = 1 - g,
       r_ch = pmin(pmax(1 - (0.86 * prey_lim + 0.58 * oxy_lim), 0), 1),
@@ -428,11 +438,6 @@ plot_fg_bivariate <- function(df, x, y,
     p <- p + geom_contour(data = dd_ok, aes(.data[[x]], .data[[y]], z = fg_eq),
                           breaks = 0, colour = "black", linewidth = 0.75)
   }
-  if (isTRUE(contour_fg_mult)) {
-    p <- p + geom_contour(data = dd_ok, aes(.data[[x]], .data[[y]], z = fg_mult),
-                          breaks = breaks_fg, colour = "black", linewidth = 0.35, linetype = "dashed")
-  }
-  
   # Masks on top
   p <- p +
     geom_raster(data = mask_df %>% filter(excl_e),  aes(.data[[x]], .data[[y]]), fill = "grey70", interpolate = TRUE) +
